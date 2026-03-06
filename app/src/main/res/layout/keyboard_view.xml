@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/keyboard_bg"
+    android:paddingTop="4dp"
+    android:paddingBottom="2dp">
+
+    <!-- Status text -->
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingBottom="2dp"
+        android:text="@string/status_ready"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <!-- Mic button row with lang + quotes + settings -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingBottom="4dp">
+
+        <!-- Mic button (center) -->
+        <ImageButton
+            android:id="@+id/micButton"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="center"
+            android:background="@drawable/mic_button_bg"
+            android:contentDescription="Microphone"
+            android:src="@drawable/ic_mic"
+            android:scaleType="centerInside"
+            android:padding="14dp" />
+
+        <!-- Language button (left) -->
+        <TextView
+            android:id="@+id/langButton"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="12dp"
+            android:background="@drawable/switch_button_bg"
+            android:gravity="center"
+            android:text="AUTO"
+            android:textColor="#FFFFFF"
+            android:textSize="9sp"
+            android:textStyle="bold" />
+
+        <!-- Quotes button (next to lang) -->
+        <TextView
+            android:id="@+id/keyQuotes"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="start|center_vertical"
+            android:layout_marginStart="56dp"
+            android:background="@drawable/switch_button_bg"
+            android:gravity="center"
+            android:text="&quot; &quot;"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <!-- Settings button (right) -->
+        <ImageButton
+            android:id="@+id/settingsButton"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="end|center_vertical"
+            android:layout_marginEnd="12dp"
+            android:background="@drawable/switch_button_bg"
+            android:contentDescription="Settings"
+            android:src="@drawable/ic_settings"
+            android:scaleType="centerInside"
+            android:padding="8dp" />
+
+    </FrameLayout>
+
+    <!-- Punctuation row: , . ? ! backspace -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:orientation="horizontal"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:layout_marginBottom="2dp">
+
+        <!-- Comma / semicolon -->
+        <LinearLayout
+            android:id="@+id/keyComma"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=","
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:lineSpacingExtra="-4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=";"
+                android:textColor="#888888"
+                android:textSize="10sp"
+                android:lineSpacingExtra="-4dp" />
+        </LinearLayout>
+
+        <!-- Dot / colon -->
+        <LinearLayout
+            android:id="@+id/keyDot"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="."
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:lineSpacingExtra="-4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=":"
+                android:textColor="#888888"
+                android:textSize="10sp"
+                android:lineSpacingExtra="-4dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/keyQuestion"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:text="?"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
+
+        <TextView
+            android:id="@+id/keyExclaim"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:text="!"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
+
+        <ImageButton
+            android:id="@+id/backspaceButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:contentDescription="Backspace"
+            android:src="@drawable/ic_backspace"
+            android:scaleType="centerInside"
+            android:padding="8dp" />
+
+    </LinearLayout>
+
+    <!-- Bottom row: keyboard switch, spacebar, enter -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:orientation="horizontal"
+        android:paddingStart="6dp"
+        android:paddingEnd="6dp"
+        android:layout_marginBottom="2dp">
+
+        <ImageButton
+            android:id="@+id/switchButton"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:contentDescription="Switch keyboard"
+            android:src="@drawable/ic_keyboard"
+            android:scaleType="centerInside"
+            android:padding="8dp" />
+
+        <!-- Spacebar / Select All -->
+        <LinearLayout
+            android:id="@+id/keySpace"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="3"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:orientation="vertical">
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="␣"
+                android:textColor="#AAAAAA"
+                android:textSize="16sp"
+                android:lineSpacingExtra="-4dp" />
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Select All"
+                android:textColor="#888888"
+                android:textSize="8sp"
+                android:lineSpacingExtra="-4dp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/keyEnter"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="2dp"
+            android:background="@drawable/key_button_bg"
+            android:gravity="center"
+            android:text="↵"
+            android:textColor="#FFFFFF"
+            android:textSize="18sp" />
+
+    </LinearLayout>
+
+</LinearLayout>

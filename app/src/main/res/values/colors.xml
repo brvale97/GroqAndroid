@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="keyboard_bg">#1E1E1E</color>
+    <color name="mic_button_idle">#2196F3</color>
+    <color name="mic_button_recording">#F44336</color>
+    <color name="mic_button_processing">#FF9800</color>
+    <color name="switch_button_bg">#424242</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+    <color name="settings_bg">#121212</color>
+    <color name="input_bg">#1E1E1E</color>
+    <color name="accent">#2196F3</color>
+</resources>

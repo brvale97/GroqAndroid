@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">GroqAndroid</string>
+    <string name="ime_name">GroqAndroid Voice</string>
+
+    <!-- Settings -->
+    <string name="settings_title">GroqAndroid Settings</string>
+    <string name="api_key_label">Groq API Key</string>
+    <string name="api_key_hint">gsk_...</string>
+    <string name="save">Save</string>
+    <string name="api_key_saved">API key saved</string>
+    <string name="api_key_empty">Please enter an API key</string>
+    <string name="api_key_info">Create an API key at console.groq.com → API Keys</string>
+
+    <!-- IME -->
+    <string name="status_ready">Tap the microphone to speak</string>
+    <string name="status_listening">Listening…</string>
+    <string name="status_processing">Processing…</string>
+    <string name="status_error">Error: %1$s</string>
+    <string name="no_api_key">Set up an API key first in the GroqAndroid app</string>
+
+    <!-- Setup instructions -->
+    <string name="setup_step1">1. Enter your Groq API key below</string>
+    <string name="setup_step2">2. Go to Settings → System → Languages &amp; input → On-screen keyboard</string>
+    <string name="setup_step3">3. Enable \"GroqAndroid Voice\"</string>
+    <string name="setup_step4">4. Open a text field and switch to GroqAndroid Voice</string>
+
+    <!-- Permission -->
+    <string name="mic_permission_needed">Microphone permission is required for speech recognition</string>
+</resources>
