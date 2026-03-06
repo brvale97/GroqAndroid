@@ -225,8 +225,25 @@ class SettingsActivity : AppCompatActivity() {
             if (isChecked) {
                 if (!isAccessibilityServiceEnabled()) {
                     bubbleSwitch.isChecked = false
-                    Toast.makeText(this, "Enable the accessibility service first", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("Enable Accessibility Service")
+                        .setMessage(
+                            "To use the floating bubble, enable the GroqAndroid Voice Input accessibility service.\n\n" +
+                            "If it shows \"Controlled by restricted setting\" or \"App was denied access\":\n\n" +
+                            "1. Go to Settings → Apps → GroqAndroid Voice Input\n" +
+                            "2. Tap the ⋮ menu (top right)\n" +
+                            "3. Select \"Allow restricted settings\"\n" +
+                            "4. Confirm with your PIN/fingerprint\n" +
+                            "5. Then go back and enable the accessibility service"
+                        )
+                        .setPositiveButton("Open Accessibility Settings") { _, _ ->
+                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        }
+                        .setNeutralButton("Open App Settings") { _, _ ->
+                            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
                 } else if (!Settings.canDrawOverlays(this)) {
                     bubbleSwitch.isChecked = false
                     Toast.makeText(this, "Overlay permission needed for the floating bubble", Toast.LENGTH_SHORT).show()

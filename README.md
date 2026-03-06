@@ -232,6 +232,40 @@ apksigner sign --ks your-keystore.jks \
 - **Short recording protection**: Recordings under ~1 second are skipped to prevent Whisper from hallucinating text based on the dictionary prompt
 - **Hint text detection**: Signal and WhatsApp return placeholder text as `node.text` when the field is empty — we detect and filter this out
 
+## Troubleshooting
+
+### "Controlled by restricted setting" / "App was denied access"
+
+This is the most common issue when installing GroqAndroid via APK (sideloading). Android blocks accessibility and input permissions for apps not installed from the Play Store.
+
+**To fix this:**
+
+1. Go to **Settings → Apps → GroqAndroid Voice Input**
+2. Tap the **three-dot menu** (⋮) in the top-right corner
+3. Select **"Allow restricted settings"** (or "Beperkte instellingen toestaan" in Dutch)
+4. Confirm with your PIN, pattern, or fingerprint
+5. Go back to **Settings → Accessibility → Installed Apps** and enable **GroqAndroid Voice Input**
+
+> **Note**: On some devices (Samsung, Xiaomi), you may need to go to **Settings → Apps → GroqAndroid Voice Input → App info** first, then look for the three-dot menu with "Allow restricted settings".
+
+> **Samsung/One UI**: The option is usually found by tapping the app name in the app list, then tapping the three dots (⋮) in the top right.
+
+### Bubble not responding to taps (Xiaomi/MIUI)
+
+Xiaomi/MIUI devices require the **"Display over other apps"** (overlay) permission for touch events to work. The app requests this automatically, but you can also enable it manually:
+
+1. Go to **Settings → Apps → GroqAndroid Voice Input → Other permissions**
+2. Enable **"Display over other apps"**
+
+### No notification when bubble is closed
+
+On Android 13+, you need to grant notification permission:
+
+1. Go to **Settings → Apps → GroqAndroid Voice Input → Notifications**
+2. Enable **"Allow notifications"**
+
+Or toggle the floating bubble off and on again in the GroqAndroid app — it will prompt for the permission.
+
 ## FAQ
 
 **Q: Is GroqAndroid free?**
