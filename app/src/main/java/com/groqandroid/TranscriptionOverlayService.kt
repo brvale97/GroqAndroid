@@ -61,6 +61,7 @@ class TranscriptionOverlayService : AccessibilityService() {
     private lateinit var audioRecorder: AudioRecorder
     private var apiClient: GroqApiClient? = null
     private var recordingJob: Job? = null
+    private var transcriptionJob: Job? = null
 
     private enum class State { IDLE, RECORDING, PROCESSING }
     private var state = State.IDLE
@@ -489,7 +490,13 @@ class TranscriptionOverlayService : AccessibilityService() {
         when (state) {
             State.IDLE -> startRecording()
             State.RECORDING -> stopRecording()
-            State.PROCESSING -> { /* ignore taps while processing */ }
+            State.PROCESSING -> {
+                // Cancel ongoing transcription
+                transcriptionJob?.cancel()
+                state = State.IDLE
+                updateBubbleState()
+                Toast.makeText(this, "Transcription cancelled", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -545,31 +552,35 @@ class TranscriptionOverlayService : AccessibilityService() {
         state = State.PROCESSING
         updateBubbleState()
 
-        scope.launch {
+        transcriptionJob = scope.launch {
             try {
-                recordingJob?.join()
+                kotlinx.coroutines.withTimeout(30_000) {
+                    recordingJob?.join()
 
-                // Skip transcription for very short recordings to avoid Whisper hallucination
-                val fileSize = audioRecorder.outputFile.length()
-                if (fileSize < 32000) { // ~1 second of 16kHz mono 16-bit + WAV header
-                    Toast.makeText(this@TranscriptionOverlayService, "Recording too short", Toast.LENGTH_SHORT).show()
-                    state = State.IDLE
-                    updateBubbleState()
-                    return@launch
+                    // Skip transcription for very short recordings to avoid Whisper hallucination
+                    val fileSize = audioRecorder.outputFile.length()
+                    if (fileSize < 32000) { // ~1 second of 16kHz mono 16-bit + WAV header
+                        launch(Dispatchers.Main) {
+                            Toast.makeText(this@TranscriptionOverlayService, "Recording too short", Toast.LENGTH_SHORT).show()
+                        }
+                        return@withTimeout
+                    }
+
+                    val language = getLanguage()
+                    val dictionary = getDictionary()
+                    val model = getWhisperModel()
+                    val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
+                    val text = applyReplacements(rawText)
+
+                    if (text.isNotEmpty()) {
+                        insertTextAtCursor(text + " ")
+                        if (isSoundEnabled()) launch(Dispatchers.IO) { playDictationCue(floatArrayOf(587.33f, 440f)) }
+                    } else {
+                        Toast.makeText(this@TranscriptionOverlayService, "No speech detected", Toast.LENGTH_SHORT).show()
+                    }
                 }
-
-                val language = getLanguage()
-                val dictionary = getDictionary()
-                val model = getWhisperModel()
-                val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
-                val text = applyReplacements(rawText)
-
-                if (text.isNotEmpty()) {
-                    insertTextAtCursor(text + " ")
-                    if (isSoundEnabled()) launch(Dispatchers.IO) { playDictationCue(floatArrayOf(587.33f, 440f)) }
-                } else {
-                    Toast.makeText(this@TranscriptionOverlayService, "No speech detected", Toast.LENGTH_SHORT).show()
-                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Toast.makeText(this@TranscriptionOverlayService, "Transcription timed out — try again", Toast.LENGTH_SHORT).show()
             } catch (e: TranscriptionException) {
                 Toast.makeText(this@TranscriptionOverlayService, "API error: ${e.message}", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
