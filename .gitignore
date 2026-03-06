@@ -10,3 +10,7 @@ keystore.jks
 *.rar
 .claude/
 app/release/
+keystore_new.jks
+hs_err_*.log
+replay_*.log
+*.png

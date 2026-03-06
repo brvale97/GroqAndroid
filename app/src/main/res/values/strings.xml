@@ -27,4 +27,8 @@
 
     <!-- Permission -->
     <string name="mic_permission_needed">Microphone permission is required for speech recognition</string>
+
+    <!-- Accessibility service -->
+    <string name="overlay_service_label">GroqAndroid Voice Input</string>
+    <string name="accessibility_service_description">Displays a floating microphone button that lets you dictate text into any app using the Groq Whisper API. Tap the bubble to record, tap again to transcribe and insert text at the cursor position. No keyboard switching required.</string>
 </resources>

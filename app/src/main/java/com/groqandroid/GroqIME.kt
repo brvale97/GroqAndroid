@@ -58,7 +58,8 @@ class GroqIME : InputMethodService() {
         "AR" to "ar",
         "TR" to "tr",
         "PL" to "pl",
-        "RU" to "ru"
+        "RU" to "ru",
+        "SK" to "sk"
     )
     private var currentLangIndex = 0
 
@@ -205,6 +206,7 @@ class GroqIME : InputMethodService() {
                     "TR" -> "Türkçe"
                     "PL" -> "Polski"
                     "RU" -> "Русский"
+                    "SK" -> "Slovenčina"
                     else -> label
                 }
                 popup.menu.add(0, index, index, fullName)
@@ -316,7 +318,8 @@ class GroqIME : InputMethodService() {
 
                 val language = getLanguage()
                 val dictionary = getDictionary()
-                val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary) ?: ""
+                val model = getWhisperModel()
+                val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
                 val text = applyReplacements(rawText)
                 val ic = currentInputConnection
                 if (text.isNotEmpty() && ic != null) {
@@ -420,6 +423,14 @@ class GroqIME : InputMethodService() {
             result = pattern.replace(result, to)
         }
         return result
+    }
+
+    private fun getWhisperModel(): String {
+        return try {
+            getPrefs()?.getString(SettingsActivity.KEY_WHISPER_MODEL, "whisper-large-v3-turbo") ?: "whisper-large-v3-turbo"
+        } catch (_: Exception) {
+            "whisper-large-v3-turbo"
+        }
     }
 
     private fun getApiKey(): String? {

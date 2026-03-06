@@ -1,10 +1,13 @@
 package com.groqandroid
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
@@ -32,12 +35,15 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_DICTIONARY = "dictionary"
         const val KEY_REPLACEMENTS = "replacements"
         const val KEY_BUBBLE_ENABLED = "bubble_enabled"
-        private const val OVERLAY_PERMISSION_REQUEST = 1001
+        const val KEY_SOUND_ENABLED = "sound_enabled"
+        const val KEY_AUTO_SHOW_BUBBLE = "auto_show_bubble"
+        const val KEY_WHISPER_MODEL = "whisper_model"
     }
 
     private lateinit var activationBanner: LinearLayout
     private lateinit var activationText: TextView
     private lateinit var activateButton: Button
+    private lateinit var bubbleSwitch: SwitchCompat
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -188,25 +194,60 @@ class SettingsActivity : AppCompatActivity() {
         }
         loadReplacementChips()
 
-        // Quick Switch Bubble
-        val bubbleSwitch = findViewById<SwitchCompat>(R.id.bubbleSwitch)
-        bubbleSwitch.isChecked = prefs.getBoolean(KEY_BUBBLE_ENABLED, false)
+        // Sound toggle (default: on)
+        val soundSwitch = findViewById<SwitchCompat>(R.id.soundSwitch)
+        soundSwitch.isChecked = prefs.getBoolean(KEY_SOUND_ENABLED, true)
+        soundSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_SOUND_ENABLED, isChecked).apply()
+        }
+
+        // Auto-show bubble toggle (default: off)
+        val autoShowSwitch = findViewById<SwitchCompat>(R.id.autoShowSwitch)
+        autoShowSwitch.isChecked = prefs.getBoolean(KEY_AUTO_SHOW_BUBBLE, false)
+        autoShowSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_AUTO_SHOW_BUBBLE, isChecked).apply()
+        }
+
+        // Whisper model picker
+        val modelGroup = findViewById<com.google.android.material.chip.ChipGroup>(R.id.modelChipGroup)
+        val currentModel = prefs.getString(KEY_WHISPER_MODEL, "whisper-large-v3-turbo") ?: "whisper-large-v3-turbo"
+        findViewById<com.google.android.material.chip.Chip>(R.id.chipTurbo).isChecked = currentModel == "whisper-large-v3-turbo"
+        findViewById<com.google.android.material.chip.Chip>(R.id.chipFull).isChecked = currentModel == "whisper-large-v3"
+        modelGroup.setOnCheckedStateChangeListener { _, checkedIds ->
+            val model = if (checkedIds.contains(R.id.chipFull)) "whisper-large-v3" else "whisper-large-v3-turbo"
+            prefs.edit().putString(KEY_WHISPER_MODEL, model).apply()
+        }
+
+        // Floating Voice Input Bubble
+        bubbleSwitch = findViewById(R.id.bubbleSwitch)
+        bubbleSwitch.isChecked = isAccessibilityServiceEnabled() && prefs.getBoolean(KEY_BUBBLE_ENABLED, false)
         bubbleSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
-                if (!Settings.canDrawOverlays(this)) {
+                if (!isAccessibilityServiceEnabled()) {
                     bubbleSwitch.isChecked = false
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivityForResult(intent, OVERLAY_PERMISSION_REQUEST)
+                    Toast.makeText(this, "Enable the accessibility service first", Toast.LENGTH_SHORT).show()
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } else if (!Settings.canDrawOverlays(this)) {
+                    bubbleSwitch.isChecked = false
+                    Toast.makeText(this, "Overlay permission needed for the floating bubble", Toast.LENGTH_SHORT).show()
+                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
                 } else {
+                    // Request notification permission on Android 13+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+                        }
+                    }
                     prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, true).apply()
-                    startService(Intent(this, FloatingBubbleService::class.java))
+                    sendBroadcast(Intent(TranscriptionOverlayService.ACTION_TOGGLE_BUBBLE).apply {
+                        setPackage(packageName)
+                    })
                 }
             } else {
                 prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, false).apply()
-                stopService(Intent(this, FloatingBubbleService::class.java))
+                sendBroadcast(Intent(TranscriptionOverlayService.ACTION_TOGGLE_BUBBLE).apply {
+                    setPackage(packageName)
+                })
             }
         }
 
@@ -216,22 +257,23 @@ class SettingsActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updateActivationBanner()
+        // Sync toggle with actual service state
+        val prefs = getEncryptedPrefs()
+        val serviceEnabled = isAccessibilityServiceEnabled()
+        if (!serviceEnabled) {
+            bubbleSwitch.isChecked = false
+            prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, false).apply()
+        } else {
+            bubbleSwitch.isChecked = prefs.getBoolean(KEY_BUBBLE_ENABLED, false)
+        }
     }
 
-    @Suppress("DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == OVERLAY_PERMISSION_REQUEST) {
-            val bubbleSwitch = findViewById<SwitchCompat>(R.id.bubbleSwitch)
-            if (Settings.canDrawOverlays(this)) {
-                val prefs = getEncryptedPrefs()
-                prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, true).apply()
-                bubbleSwitch.isChecked = true
-                startService(Intent(this, FloatingBubbleService::class.java))
-            } else {
-                bubbleSwitch.isChecked = false
-                Toast.makeText(this, "Overlay permission is required for the bubble", Toast.LENGTH_SHORT).show()
-            }
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
+        val enabledServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        return enabledServices.any {
+            it.resolveInfo.serviceInfo.packageName == packageName &&
+                it.resolveInfo.serviceInfo.name == TranscriptionOverlayService::class.java.name
         }
     }
 

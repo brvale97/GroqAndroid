@@ -25,7 +25,6 @@ class GroqApiClient(private val apiKey: String) {
 
     companion object {
         private const val API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-        private const val MODEL = "whisper-large-v3-turbo"
     }
 
     private val client = OkHttpClient.Builder()
@@ -41,7 +40,7 @@ class GroqApiClient(private val apiKey: String) {
      * @return The transcribed text.
      * @throws TranscriptionException on API errors.
      */
-    suspend fun transcribe(audioFile: File, language: String? = null, prompt: String? = null): String {
+    suspend fun transcribe(audioFile: File, language: String? = null, prompt: String? = null, model: String = "whisper-large-v3-turbo"): String {
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart(
@@ -49,7 +48,7 @@ class GroqApiClient(private val apiKey: String) {
                 audioFile.name,
                 audioFile.asRequestBody("audio/wav".toMediaType())
             )
-            .addFormDataPart("model", MODEL)
+            .addFormDataPart("model", model)
             .addFormDataPart("response_format", "json")
 
         if (language != null) {
