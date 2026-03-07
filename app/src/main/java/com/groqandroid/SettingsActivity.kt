@@ -16,6 +16,7 @@ import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.SwitchCompat
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -38,12 +39,51 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_SOUND_ENABLED = "sound_enabled"
         const val KEY_AUTO_SHOW_BUBBLE = "auto_show_bubble"
         const val KEY_WHISPER_MODEL = "whisper_model"
+        const val KEY_API_ENDPOINT = "api_endpoint"
     }
 
     private lateinit var activationBanner: LinearLayout
     private lateinit var activationText: TextView
     private lateinit var activateButton: Button
     private lateinit var bubbleSwitch: SwitchCompat
+
+    // Export/import launchers
+    private val exportLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri ?: return@registerForActivityResult
+        try {
+            val prefs = getEncryptedPrefs()
+            val export = JSONObject().apply {
+                put("dictionary", prefs.getString(KEY_DICTIONARY, "") ?: "")
+                put("replacements", JSONArray(prefs.getString(KEY_REPLACEMENTS, "[]") ?: "[]"))
+            }
+            contentResolver.openOutputStream(uri)?.use { it.write(export.toString(2).toByteArray()) }
+            Toast.makeText(this, "Settings exported", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private var onImportComplete: (() -> Unit)? = null
+    private val importLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@registerForActivityResult
+        try {
+            val json = contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return@registerForActivityResult
+            val obj = JSONObject(json)
+            val prefs = getEncryptedPrefs()
+            val editor = prefs.edit()
+            if (obj.has("dictionary")) {
+                editor.putString(KEY_DICTIONARY, obj.getString("dictionary"))
+            }
+            if (obj.has("replacements")) {
+                editor.putString(KEY_REPLACEMENTS, obj.getJSONArray("replacements").toString())
+            }
+            editor.apply()
+            onImportComplete?.invoke()
+            Toast.makeText(this, "Settings imported", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -193,6 +233,38 @@ class SettingsActivity : AppCompatActivity() {
             if (actionId == EditorInfo.IME_ACTION_DONE) { addReplacement(); true } else false
         }
         loadReplacementChips()
+
+        // Export / Import
+        val exportButton = findViewById<Button>(R.id.exportButton)
+        val importButton = findViewById<Button>(R.id.importButton)
+        exportButton.setOnClickListener {
+            exportLauncher.launch("groqandroid-settings.json")
+        }
+        importButton.setOnClickListener {
+            onImportComplete = { loadChips(); loadReplacementChips() }
+            importLauncher.launch(arrayOf("application/json"))
+        }
+
+        // Custom API Endpoint
+        val endpointInput = findViewById<EditText>(R.id.endpointInput)
+        val saveEndpointButton = findViewById<Button>(R.id.saveEndpointButton)
+        val savedEndpoint = prefs.getString(KEY_API_ENDPOINT, "") ?: ""
+        if (savedEndpoint.isNotEmpty()) {
+            endpointInput.setText(savedEndpoint)
+        }
+        saveEndpointButton.setOnClickListener {
+            val endpoint = endpointInput.text.toString().trim()
+            if (endpoint.isEmpty()) {
+                prefs.edit().remove(KEY_API_ENDPOINT).apply()
+                Toast.makeText(this, "Using default Groq endpoint", Toast.LENGTH_SHORT).show()
+            } else if (!endpoint.startsWith("https://") && !endpoint.startsWith("http://")) {
+                Toast.makeText(this, "Endpoint must start with https://", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            } else {
+                prefs.edit().putString(KEY_API_ENDPOINT, endpoint).apply()
+                Toast.makeText(this, "Endpoint saved", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         // Sound toggle (default: on)
         val soundSwitch = findViewById<SwitchCompat>(R.id.soundSwitch)

@@ -37,17 +37,19 @@ class GroqApiClient(
 
     // Pin to Google Trust Services intermediate CA (valid until 2029-02-20).
     // Protects API key in Authorization header against MITM on rooted/proxied devices.
-    // If Groq changes CA provider, this pin must be updated or removed.
-    private val certificatePinner = CertificatePinner.Builder()
-        .add("api.groq.com", "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=")
-        .build()
-
-    private val client = OkHttpClient.Builder()
-        .certificatePinner(certificatePinner)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .build()
+    // Only applied when using the default Groq API endpoint.
+    private val client = OkHttpClient.Builder().apply {
+        if (apiUrl == DEFAULT_API_URL) {
+            certificatePinner(
+                CertificatePinner.Builder()
+                    .add("api.groq.com", "sha256/kIdp6NNEd8wsugYyyIYFsi1ylMCED3hZbSR8ZFsa/A4=")
+                    .build()
+            )
+        }
+        connectTimeout(15, TimeUnit.SECONDS)
+        readTimeout(30, TimeUnit.SECONDS)
+        writeTimeout(30, TimeUnit.SECONDS)
+    }.build()
 
     /**
      * Transcribes the given audio file using Groq Whisper.

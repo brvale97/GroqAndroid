@@ -91,7 +91,11 @@ class TranscriptionOverlayService : AccessibilityService() {
                     val prefs = try { getEncryptedPrefs() } catch (_: Exception) { null }
                     bubbleEnabled = prefs?.getBoolean(SettingsActivity.KEY_BUBBLE_ENABLED, false) == true
                     if (bubbleEnabled) {
-                        showBubble()
+                        // In auto-show mode, don't show bubble immediately —
+                        // wait for a text field to be focused
+                        if (!isAutoShowEnabled()) {
+                            showBubble()
+                        }
                     } else {
                         hideBubble()
                     }
@@ -129,10 +133,11 @@ class TranscriptionOverlayService : AccessibilityService() {
             registerReceiver(commandReceiver, filter)
         }
 
-        // Show bubble immediately if enabled in settings
+        // Show bubble if enabled in settings (but not if auto-show mode is on —
+        // in that case, the bubble only appears when a text field is focused)
         val prefs = try { getEncryptedPrefs() } catch (_: Exception) { null }
         bubbleEnabled = prefs?.getBoolean(SettingsActivity.KEY_BUBBLE_ENABLED, false) == true
-        if (bubbleEnabled) {
+        if (bubbleEnabled && !isAutoShowEnabled()) {
             showBubble()
         }
     }
@@ -146,18 +151,23 @@ class TranscriptionOverlayService : AccessibilityService() {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
                 val source = event.source
-                if (source != null && source.isEditable && !bubbleVisible) {
-                    autoShown = true
-                    showBubble()
+                if (source != null && source.isEditable) {
+                    if (!bubbleVisible) {
+                        autoShown = true
+                        showBubble()
+                    } else {
+                        // Bubble already visible — mark as auto-managed so it auto-hides
+                        autoShown = true
+                    }
                 }
                 @Suppress("DEPRECATION")
                 source?.recycle()
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (!autoShown || !bubbleVisible) return
+                if (!bubbleVisible) return
                 if (state != State.IDLE) return
                 bubbleView?.postDelayed({
-                    if (!bubbleEnabled || !autoShown || !bubbleVisible) return@postDelayed
+                    if (!bubbleEnabled || !bubbleVisible) return@postDelayed
                     if (state != State.IDLE) return@postDelayed
                     val focused = try {
                         rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -556,7 +566,8 @@ class TranscriptionOverlayService : AccessibilityService() {
             Toast.makeText(this, "Set up an API key first in the GroqAndroid app", Toast.LENGTH_LONG).show()
             return
         }
-        apiClient = GroqApiClient(apiKey)
+        val endpoint = getCustomEndpoint()
+        apiClient = if (endpoint != null) GroqApiClient(apiKey, endpoint) else GroqApiClient(apiKey)
 
         // Change to recording state immediately for visual feedback
         state = State.RECORDING
@@ -796,6 +807,15 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     // --- Settings helpers (same pattern as GroqIME) ---
+
+    private fun getCustomEndpoint(): String? {
+        return try {
+            val endpoint = getEncryptedPrefs().getString(SettingsActivity.KEY_API_ENDPOINT, null)
+            if (endpoint.isNullOrBlank()) null else endpoint
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun getWhisperModel(): String {
         return try {

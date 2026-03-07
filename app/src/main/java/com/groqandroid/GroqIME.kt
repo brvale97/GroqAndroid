@@ -319,7 +319,8 @@ class GroqIME : InputMethodService() {
             setStatus(getString(R.string.no_api_key))
             return
         }
-        apiClient = GroqApiClient(apiKey)
+        val endpoint = getCustomEndpoint()
+        apiClient = if (endpoint != null) GroqApiClient(apiKey, endpoint) else GroqApiClient(apiKey)
 
         state = State.RECORDING
         updateUI()
@@ -486,6 +487,15 @@ class GroqIME : InputMethodService() {
             result = pattern.replace(result, Regex.escapeReplacement(to))
         }
         return result
+    }
+
+    private fun getCustomEndpoint(): String? {
+        return try {
+            val endpoint = getPrefs()?.getString(SettingsActivity.KEY_API_ENDPOINT, null)
+            if (endpoint.isNullOrBlank()) null else endpoint
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun getWhisperModel(): String {
