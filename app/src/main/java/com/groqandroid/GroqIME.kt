@@ -498,7 +498,10 @@ class GroqIME : InputMethodService() {
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        // EncryptedSharedPreferences can fail on work profiles, MDM devices,
+        // or after app updates that corrupt the Android Keystore.
+        setStatus("Settings unavailable — try restarting app")
         null
     }
 

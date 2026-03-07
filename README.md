@@ -266,6 +266,32 @@ On Android 13+, you need to grant notification permission:
 
 Or toggle the floating bubble off and on again in the GroqAndroid app — it will prompt for the permission.
 
+## Groq API Limits
+
+| Limit | Free Tier | Developer Tier |
+|-------|-----------|----------------|
+| **Max file size** | 25 MB | 100 MB |
+| **Min audio duration** | 0.01s | 0.01s |
+| **Prompt (dictionary)** | 224 tokens max | 224 tokens max |
+| **Supported formats** | WAV, MP3, FLAC, M4A, OGG, WebM | Same |
+| **Rate limits (RPM/RPD)** | Organization-specific | Higher |
+| **Pricing** | Free | Turbo: $0.04/hr, Full: $0.111/hr |
+
+> **Note**: Exact rate limits (requests per minute/day, audio seconds per hour/day) vary by account. Check your limits at [console.groq.com/settings/limits](https://console.groq.com/settings/limits).
+
+> **Tip**: A typical voice message (5-15 seconds, 16kHz mono WAV) is only ~150-500 KB — well within the 25 MB limit. The app enforces a 2-minute max recording duration (~3.7 MB).
+
+## Device Compatibility
+
+| Manufacturer | Android Version | Keyboard | Floating Bubble | Notes |
+|-------------|----------------|----------|-----------------|-------|
+| Xiaomi (MIUI) | 14+ | OK | OK | Needs "Display over other apps" permission for bubble |
+| Samsung (One UI) | 12+ | OK | OK | "Allow restricted settings" needed for sideloaded APK |
+| Google Pixel | 12+ | OK | OK | Works out of the box |
+| OnePlus (OxygenOS) | 12+ | OK | OK | — |
+
+> **Help us expand this table!** If you've tested on a device not listed here, please [open an issue](https://github.com/brvale97/GroqAndroid/issues) with your device model, Android version, and what works/doesn't work.
+
 ## FAQ
 
 **Q: Is GroqAndroid free?**
