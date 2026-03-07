@@ -10,4 +10,5 @@
     <color name="settings_bg">#121212</color>
     <color name="input_bg">#1E1E1E</color>
     <color name="accent">#2196F3</color>
+    <color name="switch_bg">#333333</color>
 </resources>
