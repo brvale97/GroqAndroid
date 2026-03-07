@@ -28,6 +28,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 
 class GroqIME : InputMethodService() {
@@ -319,7 +320,9 @@ class GroqIME : InputMethodService() {
                 val language = getLanguage()
                 val dictionary = getDictionary()
                 val model = getWhisperModel()
-                val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
+                val rawText = withTimeout(60_000L) {
+                    apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
+                }
                 val text = applyReplacements(rawText)
                 val ic = currentInputConnection
                 if (text.isNotEmpty() && ic != null) {
@@ -331,7 +334,9 @@ class GroqIME : InputMethodService() {
                     setStatus("No speech detected")
                 }
             } catch (e: TranscriptionException) {
-                setStatus("API error: ${e.message}")
+                setStatus("Error: ${e.message}")
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                setStatus("Timed out — try again")
             } catch (e: Exception) {
                 setStatus("Error: ${e.message}")
             } finally {

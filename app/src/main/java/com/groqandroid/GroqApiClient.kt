@@ -20,27 +20,48 @@ import kotlin.coroutines.resumeWithException
 
 /**
  * Client for the Groq Whisper transcription API.
+ * Supports automatic model fallback when the primary model fails.
  */
 class GroqApiClient(private val apiKey: String) {
 
     companion object {
         private const val API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+        private val FALLBACK_MODELS = listOf("whisper-large-v3-turbo", "whisper-large-v3")
     }
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     /**
      * Transcribes the given audio file using Groq Whisper.
-     * No language parameter is sent — Whisper auto-detects the language.
+     * If the primary model fails, automatically retries with a fallback model.
      *
      * @return The transcribed text.
-     * @throws TranscriptionException on API errors.
+     * @throws TranscriptionException if all models fail.
      */
     suspend fun transcribe(audioFile: File, language: String? = null, prompt: String? = null, model: String = "whisper-large-v3-turbo"): String {
+        // Build ordered list: selected model first, then fallbacks (no duplicates)
+        val modelsToTry = (listOf(model) + FALLBACK_MODELS).distinct()
+
+        var lastException: Exception? = null
+        for (currentModel in modelsToTry) {
+            try {
+                return transcribeWithModel(audioFile, language, prompt, currentModel)
+            } catch (e: TranscriptionException) {
+                lastException = e
+                // Continue to next model
+            } catch (e: IOException) {
+                lastException = TranscriptionException("Network error: ${e.message}", e)
+                // Continue to next model
+            }
+        }
+        throw lastException ?: TranscriptionException("All models failed")
+    }
+
+    private suspend fun transcribeWithModel(audioFile: File, language: String?, prompt: String?, model: String): String {
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart(
