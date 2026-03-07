@@ -856,8 +856,11 @@ class TranscriptionOverlayService : AccessibilityService() {
     private fun applyReplacements(text: String): String {
         var result = text
         for ((from, to) in getReplacements()) {
-            val pattern = Regex("\\b${Regex.escape(from)}\\b", RegexOption.IGNORE_CASE)
-            result = pattern.replace(result, to)
+            val escaped = Regex.escape(from)
+            val prefix = if (from.first().isLetterOrDigit() || from.first() == '_') "\\b" else ""
+            val suffix = if (from.last().isLetterOrDigit() || from.last() == '_') "\\b" else ""
+            val pattern = Regex("$prefix$escaped$suffix", RegexOption.IGNORE_CASE)
+            result = pattern.replace(result, Regex.escapeReplacement(to))
         }
         return result
     }

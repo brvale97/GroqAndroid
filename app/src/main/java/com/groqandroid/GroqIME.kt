@@ -98,6 +98,7 @@ class GroqIME : InputMethodService() {
 
         micButton = view.findViewById(R.id.micButton)
         statusText = view.findViewById(R.id.statusText)
+        statusText?.setOnClickListener { undoLastTranscription() }
 
         val switchButton = view.findViewById<ImageButton>(R.id.switchButton)
         val settingsButton = view.findViewById<ImageButton>(R.id.settingsButton)
@@ -388,6 +389,18 @@ class GroqIME : InputMethodService() {
         }
     }
 
+    private fun undoLastTranscription() {
+        val text = lastInsertedText ?: return
+        if (state != State.IDLE) return
+        try {
+            val ic = currentInputConnection ?: return
+            // Delete the last inserted text by sending backspace for each character
+            ic.deleteSurroundingText(text.length, 0)
+            setStatus("Undo: removed last transcription")
+            lastInsertedText = null
+        } catch (_: Exception) {}
+    }
+
     private fun updateUI() {
         micButton?.setBackgroundResource(
             when (state) {
@@ -465,8 +478,12 @@ class GroqIME : InputMethodService() {
     private fun applyReplacements(text: String): String {
         var result = text
         for ((from, to) in getReplacements()) {
-            val pattern = Regex("\\b${Regex.escape(from)}\\b", RegexOption.IGNORE_CASE)
-            result = pattern.replace(result, to)
+            val escaped = Regex.escape(from)
+            // Only use \b where the pattern starts/ends with a word character
+            val prefix = if (from.first().isLetterOrDigit() || from.first() == '_') "\\b" else ""
+            val suffix = if (from.last().isLetterOrDigit() || from.last() == '_') "\\b" else ""
+            val pattern = Regex("$prefix$escaped$suffix", RegexOption.IGNORE_CASE)
+            result = pattern.replace(result, Regex.escapeReplacement(to))
         }
         return result
     }

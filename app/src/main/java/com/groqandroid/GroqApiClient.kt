@@ -23,10 +23,13 @@ import kotlin.coroutines.resumeWithException
  * Client for the Groq Whisper transcription API.
  * Supports automatic model fallback when the primary model fails.
  */
-class GroqApiClient(private val apiKey: String) {
+class GroqApiClient(
+    private val apiKey: String,
+    private val apiUrl: String = DEFAULT_API_URL
+) {
 
     companion object {
-        private const val API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+        const val DEFAULT_API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
         private val FALLBACK_MODELS = listOf("whisper-large-v3-turbo", "whisper-large-v3")
         private const val MAX_RETRIES = 3
         private val RETRY_DELAYS_MS = longArrayOf(1000, 2000, 4000) // exponential backoff
@@ -122,7 +125,7 @@ class GroqApiClient(private val apiKey: String) {
         val requestBody = builder.build()
 
         val request = Request.Builder()
-            .url(API_URL)
+            .url(apiUrl)
             .header("Authorization", "Bearer $apiKey")
             .post(requestBody)
             .build()
