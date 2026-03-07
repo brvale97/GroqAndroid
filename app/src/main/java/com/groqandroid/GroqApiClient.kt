@@ -27,6 +27,8 @@ class GroqApiClient(private val apiKey: String) {
     companion object {
         private const val API_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
         private val FALLBACK_MODELS = listOf("whisper-large-v3-turbo", "whisper-large-v3")
+        private const val MAX_RETRIES = 3
+        private val RETRY_DELAYS_MS = longArrayOf(1000, 2000, 4000) // exponential backoff
     }
 
     private val client = OkHttpClient.Builder()
@@ -38,9 +40,10 @@ class GroqApiClient(private val apiKey: String) {
     /**
      * Transcribes the given audio file using Groq Whisper.
      * If the primary model fails, automatically retries with a fallback model.
+     * Retries with exponential backoff on 429/5xx errors.
      *
      * @return The transcribed text.
-     * @throws TranscriptionException if all models fail.
+     * @throws TranscriptionException if all models and retries fail.
      */
     suspend fun transcribe(audioFile: File, language: String? = null, prompt: String? = null, model: String = "whisper-large-v3-turbo"): String {
         // Build ordered list: selected model first, then fallbacks (no duplicates)
@@ -50,6 +53,9 @@ class GroqApiClient(private val apiKey: String) {
         for (currentModel in modelsToTry) {
             try {
                 return transcribeWithModel(audioFile, language, prompt, currentModel)
+            } catch (e: AuthenticationException) {
+                // Don't retry auth errors or try other models — key is invalid
+                throw e
             } catch (e: TranscriptionException) {
                 lastException = e
                 // Continue to next model
@@ -62,6 +68,30 @@ class GroqApiClient(private val apiKey: String) {
     }
 
     private suspend fun transcribeWithModel(audioFile: File, language: String?, prompt: String?, model: String): String {
+        var lastException: Exception? = null
+        for (attempt in 0 until MAX_RETRIES) {
+            try {
+                return executeTranscription(audioFile, language, prompt, model)
+            } catch (e: AuthenticationException) {
+                throw e // Never retry auth errors
+            } catch (e: RetryableException) {
+                lastException = e
+                if (attempt < MAX_RETRIES - 1) {
+                    kotlinx.coroutines.delay(RETRY_DELAYS_MS[attempt])
+                }
+            } catch (e: TranscriptionException) {
+                throw e // Non-retryable API errors
+            } catch (e: IOException) {
+                lastException = TranscriptionException("Network error: ${e.message}", e)
+                if (attempt < MAX_RETRIES - 1) {
+                    kotlinx.coroutines.delay(RETRY_DELAYS_MS[attempt])
+                }
+            }
+        }
+        throw lastException ?: TranscriptionException("All retries failed")
+    }
+
+    private suspend fun executeTranscription(audioFile: File, language: String?, prompt: String?, model: String): String {
         val builder = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart(
@@ -100,7 +130,12 @@ class GroqApiClient(private val apiKey: String) {
                 } catch (_: Exception) {
                     body
                 }
-                throw TranscriptionException("API error ${it.code}: $errorMsg")
+                when (it.code) {
+                    401, 403 -> throw AuthenticationException("Invalid API key — check your key in Settings")
+                    429 -> throw RetryableException("Rate limited — retrying...")
+                    in 500..599 -> throw RetryableException("Server error ${it.code}: $errorMsg")
+                    else -> throw TranscriptionException("API error ${it.code}: $errorMsg")
+                }
             }
 
             val json = JSONObject(body)
@@ -131,4 +166,6 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont 
     })
 }
 
-class TranscriptionException(message: String, cause: Throwable? = null) : Exception(message, cause)
+open class TranscriptionException(message: String, cause: Throwable? = null) : Exception(message, cause)
+class AuthenticationException(message: String, cause: Throwable? = null) : TranscriptionException(message, cause)
+class RetryableException(message: String, cause: Throwable? = null) : TranscriptionException(message, cause)

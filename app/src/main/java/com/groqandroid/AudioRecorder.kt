@@ -20,18 +20,27 @@ class AudioRecorder(private val cacheDir: File) {
         private const val SAMPLE_RATE = 16_000
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        const val MAX_DURATION_MS = 120_000L // 2 minutes max recording
     }
 
     @Volatile
     private var isRecording = false
 
     private var audioRecord: AudioRecord? = null
+    private var recordingStartTime = 0L
+
+    /** Callback invoked when max duration is reached. Called from IO thread. */
+    var onMaxDurationReached: (() -> Unit)? = null
 
     val outputFile: File
         get() = File(cacheDir, "recording.wav")
 
+    /** Duration of current/last recording in milliseconds. */
+    val durationMs: Long
+        get() = if (recordingStartTime > 0) System.currentTimeMillis() - recordingStartTime else 0
+
     /**
-     * Records audio until [stop] is called.
+     * Records audio until [stop] is called or max duration is reached.
      * Must be called from a coroutine — runs on IO dispatcher.
      */
     suspend fun record() = withContext(Dispatchers.IO) {
@@ -65,8 +74,15 @@ class AudioRecorder(private val cacheDir: File) {
 
             recorder.startRecording()
             isRecording = true
+            recordingStartTime = System.currentTimeMillis()
 
             while (isRecording && isActive) {
+                // Auto-stop at max duration
+                if (System.currentTimeMillis() - recordingStartTime >= MAX_DURATION_MS) {
+                    isRecording = false
+                    onMaxDurationReached?.invoke()
+                    break
+                }
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
                     fos.write(buffer, 0, read)
@@ -85,6 +101,11 @@ class AudioRecorder(private val cacheDir: File) {
 
     fun stop() {
         isRecording = false
+    }
+
+    /** Cleans up the WAV file after transcription. */
+    fun cleanup() {
+        try { outputFile.delete() } catch (_: Exception) {}
     }
 
     val recording: Boolean

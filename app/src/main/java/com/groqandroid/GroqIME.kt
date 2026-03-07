@@ -7,6 +7,9 @@ import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -66,10 +69,17 @@ class GroqIME : InputMethodService() {
 
     private enum class State { IDLE, RECORDING, PROCESSING }
     private var state = State.IDLE
+    private var lastInsertedText: String? = null
 
     override fun onCreate() {
         super.onCreate()
         audioRecorder = AudioRecorder(cacheDir)
+        audioRecorder.onMaxDurationReached = {
+            Handler(Looper.getMainLooper()).post {
+                setStatus("Max duration reached (2 min)")
+                stopRecording()
+            }
+        }
     }
 
     override fun onEvaluateFullscreenMode(): Boolean = false
@@ -259,12 +269,33 @@ class GroqIME : InputMethodService() {
         } catch (_: Exception) {}
     }
 
+    @Volatile
+    private var micClickGuard = false
+
     private fun onMicClicked() {
+        // Guard against rapid double-taps
+        if (micClickGuard) return
+        micClickGuard = true
+        Handler(Looper.getMainLooper()).postDelayed({ micClickGuard = false }, 300)
+
         when (state) {
             State.IDLE -> startRecording()
             State.RECORDING -> stopRecording()
             State.PROCESSING -> { /* ignore taps while processing */ }
         }
+    }
+
+    private fun vibrate(durationMs: Long = 30) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                val v = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                v.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (_: Exception) {}
     }
 
     private fun startRecording() {
@@ -291,6 +322,7 @@ class GroqIME : InputMethodService() {
 
         state = State.RECORDING
         updateUI()
+        vibrate(30)
 
         recordingJob = scope.launch(Dispatchers.IO) {
             try {
@@ -306,11 +338,16 @@ class GroqIME : InputMethodService() {
     }
 
     private fun stopRecording() {
+        if (state != State.RECORDING) return
         try {
             audioRecorder.stop()
         } catch (_: Exception) {}
         state = State.PROCESSING
-        updateUI()
+        vibrate(50)
+
+        val durationSec = (audioRecorder.durationMs / 1000).toInt()
+        setStatus("Transcribing... (${durationSec}s audio)")
+        micButton?.setBackgroundResource(R.drawable.mic_button_processing)
 
         scope.launch {
             try {
@@ -327,12 +364,15 @@ class GroqIME : InputMethodService() {
                 val ic = currentInputConnection
                 if (text.isNotEmpty() && ic != null) {
                     ic.commitText(text + " ", 1)
+                    lastInsertedText = text + " "
                     setStatus(text)
                 } else if (text.isNotEmpty()) {
                     setStatus("No input connection")
                 } else {
                     setStatus("No speech detected")
                 }
+            } catch (e: AuthenticationException) {
+                setStatus("Invalid API key — check Settings")
             } catch (e: TranscriptionException) {
                 setStatus("Error: ${e.message}")
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -340,6 +380,7 @@ class GroqIME : InputMethodService() {
             } catch (e: Exception) {
                 setStatus("Error: ${e.message}")
             } finally {
+                audioRecorder.cleanup()
                 state = State.IDLE
                 // Only update button color, don't overwrite status text
                 micButton?.setBackgroundResource(R.drawable.mic_button_bg)
@@ -401,7 +442,7 @@ class GroqIME : InputMethodService() {
         return try {
             val dict = getPrefs()?.getString(SettingsActivity.KEY_DICTIONARY, null)
             if (dict.isNullOrBlank()) return null
-            val words = dict.split(",").filter { it.isNotBlank() }.joinToString(", ") { it.trim() }
+            val words = dict.split(",").filter { it.isNotBlank() }.take(200).joinToString(", ") { it.trim() }
             if (words.isEmpty()) null else "Vocabulary: $words."
         } catch (_: Exception) {
             null

@@ -18,6 +18,9 @@ import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -65,6 +68,9 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private enum class State { IDLE, RECORDING, PROCESSING }
     private var state = State.IDLE
+    @Volatile
+    private var tapGuard = false
+    private var lastInsertedText: String? = null
 
     private var bubbleVisible = false
     private var closeButtonView: View? = null
@@ -102,6 +108,12 @@ class TranscriptionOverlayService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         audioRecorder = AudioRecorder(cacheDir)
+        audioRecorder.onMaxDurationReached = {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Toast.makeText(this, "Max duration reached (2 min)", Toast.LENGTH_SHORT).show()
+                stopRecording()
+            }
+        }
         tapThresholdPx = TAP_THRESHOLD_DP * resources.displayMetrics.density
         // no init needed for audio cues
         createNotificationChannel()
@@ -486,7 +498,25 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     // --- Recording & transcription ---
 
+    private fun vibrate(durationMs: Long = 30) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                val v = getSystemService(VIBRATOR_SERVICE) as Vibrator
+                v.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun onBubbleTapped() {
+        // Guard against rapid double-taps
+        if (tapGuard) return
+        tapGuard = true
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tapGuard = false }, 300)
+
         when (state) {
             State.IDLE -> startRecording()
             State.RECORDING -> stopRecording()
@@ -531,6 +561,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         // Change to recording state immediately for visual feedback
         state = State.RECORDING
         updateBubbleState()
+        vibrate(30)
         if (isSoundEnabled()) scope.launch(Dispatchers.IO) { playDictationCue(floatArrayOf(523.25f, 659.25f)) }
 
         recordingJob = scope.launch(Dispatchers.IO) {
@@ -548,13 +579,15 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun stopRecording() {
+        if (state != State.RECORDING) return
         try { audioRecorder.stop() } catch (_: Exception) {}
         state = State.PROCESSING
         updateBubbleState()
+        vibrate(50)
 
         transcriptionJob = scope.launch {
             try {
-                kotlinx.coroutines.withTimeout(30_000) {
+                kotlinx.coroutines.withTimeout(60_000) {
                     recordingJob?.join()
 
                     // Skip transcription for very short recordings to avoid Whisper hallucination
@@ -574,18 +607,22 @@ class TranscriptionOverlayService : AccessibilityService() {
 
                     if (text.isNotEmpty()) {
                         insertTextAtCursor(text + " ")
+                        lastInsertedText = text + " "
                         if (isSoundEnabled()) launch(Dispatchers.IO) { playDictationCue(floatArrayOf(587.33f, 440f)) }
                     } else {
                         Toast.makeText(this@TranscriptionOverlayService, "No speech detected", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                Toast.makeText(this@TranscriptionOverlayService, "Transcription timed out — try again", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@TranscriptionOverlayService, "Timed out — try again", Toast.LENGTH_SHORT).show()
+            } catch (e: AuthenticationException) {
+                Toast.makeText(this@TranscriptionOverlayService, "Invalid API key — check Settings", Toast.LENGTH_LONG).show()
             } catch (e: TranscriptionException) {
-                Toast.makeText(this@TranscriptionOverlayService, "API error: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@TranscriptionOverlayService, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(this@TranscriptionOverlayService, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
+                audioRecorder.cleanup()
                 state = State.IDLE
                 updateBubbleState()
             }
@@ -620,6 +657,7 @@ class TranscriptionOverlayService : AccessibilityService() {
             if (!success) {
                 // Fallback for apps like Claude that use WebView/custom text fields
                 pasteViaClipboard(text)
+                Toast.makeText(this, "Pasted via clipboard", Toast.LENGTH_SHORT).show()
             }
 
             @Suppress("DEPRECATION")
@@ -795,7 +833,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         return try {
             val dict = getEncryptedPrefs().getString(SettingsActivity.KEY_DICTIONARY, null)
             if (dict.isNullOrBlank()) return null
-            val words = dict.split(",").filter { it.isNotBlank() }.joinToString(", ") { it.trim() }
+            val words = dict.split(",").filter { it.isNotBlank() }.take(200).joinToString(", ") { it.trim() }
             if (words.isEmpty()) null else "Vocabulary: $words."
         } catch (_: Exception) {
             null
