@@ -143,6 +143,7 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private var autoShown = false // tracks if bubble was auto-shown (so we only auto-hide those)
+    private var autoShowPackage: String? = null // package where bubble was auto-shown
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!bubbleEnabled || event == null) return
@@ -152,33 +153,51 @@ class TranscriptionOverlayService : AccessibilityService() {
             AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
                 val source = event.source
                 if (source != null && source.isEditable) {
+                    autoShowPackage = event.packageName?.toString()
                     if (!bubbleVisible) {
                         autoShown = true
                         showBubble()
                     } else {
-                        // Bubble already visible — mark as auto-managed so it auto-hides
                         autoShown = true
                     }
+                } else if (autoShown && bubbleVisible && state == State.IDLE) {
+                    // Focus moved to non-editable view — hide auto-shown bubble
+                    autoShown = false
+                    autoShowPackage = null
+                    hideBubble(isAutoHide = true)
                 }
                 @Suppress("DEPRECATION")
                 source?.recycle()
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (!bubbleVisible) return
+                if (!bubbleVisible || !autoShown) return
                 if (state != State.IDLE) return
+
+                val eventPackage = event.packageName?.toString()
+
+                // User switched to a different app → hide immediately
+                if (eventPackage != null && autoShowPackage != null && eventPackage != autoShowPackage) {
+                    autoShown = false
+                    autoShowPackage = null
+                    hideBubble(isAutoHide = true)
+                    return
+                }
+
+                // Same app — check if there's still a focused editable field after delay
                 bubbleView?.postDelayed({
-                    if (!bubbleEnabled || !bubbleVisible) return@postDelayed
+                    if (!bubbleEnabled || !bubbleVisible || !autoShown) return@postDelayed
                     if (state != State.IDLE) return@postDelayed
                     val focused = try {
                         rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                     } catch (_: Exception) { null }
                     if (focused == null || !focused.isEditable) {
                         autoShown = false
-                        hideBubble()
+                        autoShowPackage = null
+                        hideBubble(isAutoHide = true)
                     }
                     @Suppress("DEPRECATION")
                     focused?.recycle()
-                }, 300)
+                }, 500)
             }
         }
     }
@@ -319,7 +338,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
     }
 
-    fun hideBubble() {
+    fun hideBubble(isAutoHide: Boolean = false) {
         if (!bubbleVisible) return
 
         // Stop recording if active
@@ -335,11 +354,15 @@ class TranscriptionOverlayService : AccessibilityService() {
         bubbleView = null
         bubbleVisible = false
 
-        // Show notification with "Show" button so user can bring bubble back
-        if (bubbleEnabled) {
+        if (isAutoHide) {
+            // Auto-hide: silently remove bubble, no notification (it will re-appear on next text field focus)
+            hideNotification()
+        } else if (bubbleEnabled) {
+            // Manual hide (close button): show "tap to show" notification
             hideNotification()
             showNotification(bubbleHidden = true)
         } else {
+            // Bubble disabled entirely
             hideNotification()
         }
     }
