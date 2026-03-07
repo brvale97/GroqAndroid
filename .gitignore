@@ -14,3 +14,4 @@ keystore_new.jks
 hs_err_*.log
 replay_*.log
 *.png
+keystore.properties
