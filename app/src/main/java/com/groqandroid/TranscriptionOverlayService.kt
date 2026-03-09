@@ -3,6 +3,7 @@ package com.groqandroid
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,9 +19,12 @@ import android.content.pm.PackageManager
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -28,6 +32,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.ImageView
+import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -53,6 +58,26 @@ class TranscriptionOverlayService : AccessibilityService() {
         private const val KEY_BUBBLE_X = "bubble_x"
         private const val KEY_BUBBLE_Y = "bubble_y"
         private const val TAP_THRESHOLD_DP = 10
+        private const val KEEPALIVE_INTERVAL_MS = 60_000L
+
+        val LANGUAGE_OPTIONS = listOf(
+            "Auto-detect" to null,
+            "Nederlands" to "nl",
+            "English" to "en",
+            "Deutsch" to "de",
+            "Français" to "fr",
+            "Español" to "es",
+            "Italiano" to "it",
+            "Português" to "pt",
+            "日本語" to "ja",
+            "中文" to "zh",
+            "한국어" to "ko",
+            "العربية" to "ar",
+            "Türkçe" to "tr",
+            "Polski" to "pl",
+            "Русский" to "ru",
+            "Slovenčina" to "sk"
+        )
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -73,12 +98,29 @@ class TranscriptionOverlayService : AccessibilityService() {
     private var lastInsertedText: String? = null
 
     private var bubbleVisible = false
-    private var closeButtonView: View? = null
-    private var closeButtonParams: WindowManager.LayoutParams? = null
     private var bubbleEnabled = false // user toggle from settings
     private var tapThresholdPx = 10f // computed in onServiceConnected
-    private var longPressHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var longPressHandler = Handler(Looper.getMainLooper())
     private var longPressRunnable: Runnable? = null
+
+    // Keepalive: re-attach bubble if OS removes the view
+    private val keepaliveHandler = Handler(Looper.getMainLooper())
+    private val keepaliveRunnable = object : Runnable {
+        override fun run() {
+            if (bubbleEnabled && bubbleVisible && bubbleView?.windowToken == null) {
+                // View was detached by OS — re-add it
+                bubbleVisible = false
+                val wasMinimized = isMinimized
+                showBubble()
+                if (wasMinimized) minimizeBubble()
+            }
+            keepaliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS)
+        }
+    }
+
+    // Slide-minimize state
+    private var isMinimized = false
+    private var savedExpandedX = 0
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -113,7 +155,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         super.onServiceConnected()
         audioRecorder = AudioRecorder(cacheDir)
         audioRecorder.onMaxDurationReached = {
-            android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Handler(Looper.getMainLooper()).post {
                 Toast.makeText(this, "Max duration reached (2 min)", Toast.LENGTH_SHORT).show()
                 stopRecording()
             }
@@ -140,6 +182,9 @@ class TranscriptionOverlayService : AccessibilityService() {
         if (bubbleEnabled && !isAutoShowEnabled()) {
             showBubble()
         }
+
+        // Start keepalive checker
+        keepaliveHandler.postDelayed(keepaliveRunnable, KEEPALIVE_INTERVAL_MS)
     }
 
     private var autoShown = false // tracks if bubble was auto-shown (so we only auto-hide those)
@@ -157,14 +202,17 @@ class TranscriptionOverlayService : AccessibilityService() {
                     if (!bubbleVisible) {
                         autoShown = true
                         showBubble()
+                    } else if (isMinimized) {
+                        autoShown = true
+                        expandBubble()
                     } else {
                         autoShown = true
                     }
                 } else if (autoShown && bubbleVisible && state == State.IDLE) {
-                    // Focus moved to non-editable view — hide auto-shown bubble
+                    // Focus moved to non-editable view — minimize auto-shown bubble
                     autoShown = false
                     autoShowPackage = null
-                    hideBubble(isAutoHide = true)
+                    minimizeBubble()
                 }
                 @Suppress("DEPRECATION")
                 source?.recycle()
@@ -175,11 +223,11 @@ class TranscriptionOverlayService : AccessibilityService() {
 
                 val eventPackage = event.packageName?.toString()
 
-                // User switched to a different app → hide immediately
+                // User switched to a different app → minimize immediately
                 if (eventPackage != null && autoShowPackage != null && eventPackage != autoShowPackage) {
                     autoShown = false
                     autoShowPackage = null
-                    hideBubble(isAutoHide = true)
+                    minimizeBubble()
                     return
                 }
 
@@ -193,7 +241,7 @@ class TranscriptionOverlayService : AccessibilityService() {
                     if (focused == null || !focused.isEditable) {
                         autoShown = false
                         autoShowPackage = null
-                        hideBubble(isAutoHide = true)
+                        minimizeBubble()
                     }
                     @Suppress("DEPRECATION")
                     focused?.recycle()
@@ -211,10 +259,13 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        // Required override
+        // Service interrupted — restart keepalive check after delay
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
+        keepaliveHandler.postDelayed(keepaliveRunnable, 5_000)
     }
 
     override fun onDestroy() {
+        keepaliveHandler.removeCallbacks(keepaliveRunnable)
         try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
         hideBubble()
         try {
@@ -338,7 +389,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
     }
 
-    fun hideBubble(isAutoHide: Boolean = false) {
+    fun hideBubble() {
         if (!bubbleVisible) return
 
         // Stop recording if active
@@ -347,18 +398,15 @@ class TranscriptionOverlayService : AccessibilityService() {
             state = State.IDLE
         }
 
-        hideCloseButton()
+        isMinimized = false
         try {
             windowManager?.removeView(bubbleView)
         } catch (_: Exception) {}
         bubbleView = null
         bubbleVisible = false
 
-        if (isAutoHide) {
-            // Auto-hide: silently remove bubble, no notification (it will re-appear on next text field focus)
-            hideNotification()
-        } else if (bubbleEnabled) {
-            // Manual hide (close button): show "tap to show" notification
+        if (bubbleEnabled) {
+            // Manual hide: show "tap to show" notification
             hideNotification()
             showNotification(bubbleHidden = true)
         } else {
@@ -388,17 +436,18 @@ class TranscriptionOverlayService : AccessibilityService() {
                     isDragging = false
                     isLongPress = false
                     // Visual press feedback
-                    v.alpha = 0.6f
+                    v.alpha = if (isMinimized) 0.3f else 0.6f
                     v.scaleX = 0.9f
                     v.scaleY = 0.9f
-                    // Start long-press timer (only when idle)
-                    if (state == State.IDLE) {
+                    // Start long-press timer (only when idle and not minimized)
+                    if (state == State.IDLE && !isMinimized) {
                         longPressRunnable = Runnable {
                             isLongPress = true
                             v.alpha = 1.0f
                             v.scaleX = 1.0f
                             v.scaleY = 1.0f
-                            showCloseButton()
+                            vibrate(30)
+                            showLanguagePopup(v)
                         }
                         longPressHandler.postDelayed(longPressRunnable!!, 600)
                     }
@@ -411,7 +460,10 @@ class TranscriptionOverlayService : AccessibilityService() {
                         isDragging = true
                         isLongPress = false
                         longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                        hideCloseButton()
+                        // If minimized, restore on drag
+                        if (isMinimized) {
+                            isMinimized = false
+                        }
                         // Restore visual state during drag
                         v.alpha = 1.0f
                         v.scaleX = 1.0f
@@ -429,12 +481,12 @@ class TranscriptionOverlayService : AccessibilityService() {
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
                     // Restore visual state
-                    v.alpha = 1.0f
+                    v.alpha = if (isMinimized) 0.5f else 1.0f
                     v.scaleX = 1.0f
                     v.scaleY = 1.0f
 
                     if (isLongPress) {
-                        // Long press handled — close button is shown
+                        // Long press handled — language popup is shown
                     } else if (!isDragging) {
                         onBubbleTapped()
                     } else {
@@ -445,7 +497,7 @@ class TranscriptionOverlayService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                    v.alpha = 1.0f
+                    v.alpha = if (isMinimized) 0.5f else 1.0f
                     v.scaleX = 1.0f
                     v.scaleY = 1.0f
                     true
@@ -455,56 +507,88 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
     }
 
-    private fun showCloseButton() {
-        if (closeButtonView != null) return
-        val wm = windowManager ?: return
+    private fun minimizeBubble() {
+        if (isMinimized || !bubbleVisible) return
         val params = layoutParams ?: return
+        val view = bubbleView ?: return
+        val screenWidth = resources.displayMetrics.widthPixels
         val bubbleSize = (48 * resources.displayMetrics.density).toInt()
-        val closeSize = (24 * resources.displayMetrics.density).toInt()
+        val visiblePx = (12 * resources.displayMetrics.density).toInt()
 
-        val overlayType = if (android.provider.Settings.canDrawOverlays(this)) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
-        }
+        savedExpandedX = params.x
+        isMinimized = true
 
-        closeButtonParams = WindowManager.LayoutParams(
-            closeSize, closeSize,
-            overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = params.x + bubbleSize - closeSize / 2
-            y = params.y - closeSize / 2
-        }
+        // Determine which edge is closest
+        val centerX = params.x + bubbleSize / 2
+        val targetX = if (centerX < screenWidth / 2) -(bubbleSize - visiblePx) else screenWidth - visiblePx
 
-        closeButtonView = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            setBackgroundResource(R.drawable.mic_button_recording)
-            val pad = (4 * resources.displayMetrics.density).toInt()
-            setPadding(pad, pad, pad, pad)
-            elevation = 10 * resources.displayMetrics.density
-            setOnClickListener {
-                hideCloseButton()
-                hideBubble()
+        ValueAnimator.ofInt(params.x, targetX).apply {
+            duration = 250
+            addUpdateListener { anim ->
+                params.x = anim.animatedValue as Int
+                try { windowManager?.updateViewLayout(view, params) } catch (_: Exception) {}
             }
+            start()
         }
-
-        try {
-            wm.addView(closeButtonView, closeButtonParams)
-            // Auto-hide close button after 3 seconds
-            longPressHandler.postDelayed({ hideCloseButton() }, 3000)
-        } catch (_: Exception) {}
+        ValueAnimator.ofFloat(view.alpha, 0.5f).apply {
+            duration = 250
+            addUpdateListener { view.alpha = it.animatedValue as Float }
+            start()
+        }
     }
 
-    private fun hideCloseButton() {
-        if (closeButtonView == null) return
+    private fun expandBubble() {
+        if (!isMinimized || !bubbleVisible) return
+        val params = layoutParams ?: return
+        val view = bubbleView ?: return
+
+        isMinimized = false
+
+        ValueAnimator.ofInt(params.x, savedExpandedX).apply {
+            duration = 250
+            addUpdateListener { anim ->
+                params.x = anim.animatedValue as Int
+                try { windowManager?.updateViewLayout(view, params) } catch (_: Exception) {}
+            }
+            start()
+        }
+        ValueAnimator.ofFloat(view.alpha, 1.0f).apply {
+            duration = 250
+            addUpdateListener { view.alpha = it.animatedValue as Float }
+            start()
+        }
+    }
+
+    private fun showLanguagePopup(anchor: View) {
         try {
-            windowManager?.removeView(closeButtonView)
+            val wrapper = ContextThemeWrapper(this, com.google.android.material.R.style.Theme_MaterialComponents_DayNight_NoActionBar)
+            val popup = PopupMenu(wrapper, anchor)
+            LANGUAGE_OPTIONS.forEachIndexed { index, (name, _) ->
+                popup.menu.add(0, index, index, name)
+            }
+            // Add "Verbergen" as last item
+            popup.menu.add(0, LANGUAGE_OPTIONS.size, LANGUAGE_OPTIONS.size, "Verbergen")
+
+            popup.setOnMenuItemClickListener { item ->
+                if (item.itemId == LANGUAGE_OPTIONS.size) {
+                    // "Verbergen" selected
+                    hideBubble()
+                } else {
+                    val (name, code) = LANGUAGE_OPTIONS[item.itemId]
+                    try {
+                        val prefs = getEncryptedPrefs()
+                        if (code != null) {
+                            prefs.edit().putString(SettingsActivity.KEY_LANGUAGE, code).apply()
+                        } else {
+                            prefs.edit().remove(SettingsActivity.KEY_LANGUAGE).apply()
+                        }
+                        Toast.makeText(this, name, Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+                }
+                true
+            }
+            popup.show()
         } catch (_: Exception) {}
-        closeButtonView = null
-        closeButtonParams = null
     }
 
     private fun snapToEdge() {
@@ -545,10 +629,16 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun onBubbleTapped() {
+        // If minimized, expand and don't start recording
+        if (isMinimized) {
+            expandBubble()
+            return
+        }
+
         // Guard against rapid double-taps
         if (tapGuard) return
         tapGuard = true
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ tapGuard = false }, 300)
+        Handler(Looper.getMainLooper()).postDelayed({ tapGuard = false }, 300)
 
         when (state) {
             State.IDLE -> startRecording()
@@ -564,6 +654,9 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun startRecording() {
+        // Expand if minimized before recording
+        if (isMinimized) expandBubble()
+
         // Check microphone permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED
@@ -744,7 +837,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         // Set our text
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("transcription", text))
         // Small delay to let clipboard update, then paste
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+        Handler(Looper.getMainLooper()).postDelayed({
             try {
                 // Simulate Ctrl+V paste via accessibility global action
                 // Use dispatchGesture or key events - but the most reliable way is performGlobalAction
@@ -756,7 +849,7 @@ class TranscriptionOverlayService : AccessibilityService() {
                     node.recycle()
                 }
                 // Restore previous clipboard after a short delay
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                Handler(Looper.getMainLooper()).postDelayed({
                     try {
                         if (previousClip != null) clipboard.setPrimaryClip(previousClip)
                     } catch (_: Exception) {}

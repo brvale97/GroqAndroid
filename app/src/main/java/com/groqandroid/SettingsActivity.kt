@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
 import android.view.accessibility.AccessibilityManager
@@ -354,6 +355,20 @@ class SettingsActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, false).apply()
         } else {
             bubbleSwitch.isChecked = prefs.getBoolean(KEY_BUBBLE_ENABLED, false)
+            // Request battery optimization exemption when bubble is enabled
+            if (prefs.getBoolean(KEY_BUBBLE_ENABLED, false)) {
+                requestBatteryOptimizationExemptionIfNeeded()
+            }
+        }
+    }
+
+    private fun requestBatteryOptimizationExemptionIfNeeded() {
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            try {
+                @Suppress("BatteryLife")
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            } catch (_: Exception) {}
         }
     }
 
