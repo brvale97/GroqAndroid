@@ -2,8 +2,6 @@ package com.groqandroid
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityServiceInfo
-import android.animation.ValueAnimator
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -110,17 +108,11 @@ class TranscriptionOverlayService : AccessibilityService() {
             if (bubbleEnabled && bubbleVisible && bubbleView?.windowToken == null) {
                 // View was detached by OS — re-add it
                 bubbleVisible = false
-                val wasMinimized = isMinimized
                 showBubble()
-                if (wasMinimized) minimizeBubble()
             }
             keepaliveHandler.postDelayed(this, KEEPALIVE_INTERVAL_MS)
         }
     }
-
-    // Slide-minimize state
-    private var isMinimized = false
-    private var savedExpandedX = 0
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -133,11 +125,7 @@ class TranscriptionOverlayService : AccessibilityService() {
                     val prefs = try { getEncryptedPrefs() } catch (_: Exception) { null }
                     bubbleEnabled = prefs?.getBoolean(SettingsActivity.KEY_BUBBLE_ENABLED, false) == true
                     if (bubbleEnabled) {
-                        // In auto-show mode, don't show bubble immediately —
-                        // wait for a text field to be focused
-                        if (!isAutoShowEnabled()) {
-                            showBubble()
-                        }
+                        showBubble()
                     } else {
                         hideBubble()
                     }
@@ -175,11 +163,10 @@ class TranscriptionOverlayService : AccessibilityService() {
             registerReceiver(commandReceiver, filter)
         }
 
-        // Show bubble if enabled in settings (but not if auto-show mode is on —
-        // in that case, the bubble only appears when a text field is focused)
+        // Show bubble if enabled in settings
         val prefs = try { getEncryptedPrefs() } catch (_: Exception) { null }
         bubbleEnabled = prefs?.getBoolean(SettingsActivity.KEY_BUBBLE_ENABLED, false) == true
-        if (bubbleEnabled && !isAutoShowEnabled()) {
+        if (bubbleEnabled) {
             showBubble()
         }
 
@@ -187,75 +174,8 @@ class TranscriptionOverlayService : AccessibilityService() {
         keepaliveHandler.postDelayed(keepaliveRunnable, KEEPALIVE_INTERVAL_MS)
     }
 
-    private var autoShown = false // tracks if bubble was auto-shown (so we only auto-hide those)
-    private var autoShowPackage: String? = null // package where bubble was auto-shown
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!bubbleEnabled || event == null) return
-        if (!isAutoShowEnabled()) return
-
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {
-                val source = event.source
-                if (source != null && source.isEditable) {
-                    autoShowPackage = event.packageName?.toString()
-                    if (!bubbleVisible) {
-                        autoShown = true
-                        showBubble()
-                    } else if (isMinimized) {
-                        autoShown = true
-                        expandBubble()
-                    } else {
-                        autoShown = true
-                    }
-                } else if (autoShown && bubbleVisible && state == State.IDLE) {
-                    // Focus moved to non-editable view — minimize auto-shown bubble
-                    autoShown = false
-                    autoShowPackage = null
-                    minimizeBubble()
-                }
-                @Suppress("DEPRECATION")
-                source?.recycle()
-            }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                if (!bubbleVisible || !autoShown) return
-                if (state != State.IDLE) return
-
-                val eventPackage = event.packageName?.toString()
-
-                // User switched to a different app → minimize immediately
-                if (eventPackage != null && autoShowPackage != null && eventPackage != autoShowPackage) {
-                    autoShown = false
-                    autoShowPackage = null
-                    minimizeBubble()
-                    return
-                }
-
-                // Same app — check if there's still a focused editable field after delay
-                bubbleView?.postDelayed({
-                    if (!bubbleEnabled || !bubbleVisible || !autoShown) return@postDelayed
-                    if (state != State.IDLE) return@postDelayed
-                    val focused = try {
-                        rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-                    } catch (_: Exception) { null }
-                    if (focused == null || !focused.isEditable) {
-                        autoShown = false
-                        autoShowPackage = null
-                        minimizeBubble()
-                    }
-                    @Suppress("DEPRECATION")
-                    focused?.recycle()
-                }, 500)
-            }
-        }
-    }
-
-    private fun isAutoShowEnabled(): Boolean {
-        return try {
-            getEncryptedPrefs().getBoolean(SettingsActivity.KEY_AUTO_SHOW_BUBBLE, false)
-        } catch (_: Exception) {
-            false
-        }
+        // No-op — required override for AccessibilityService
     }
 
     override fun onInterrupt() {
@@ -398,7 +318,6 @@ class TranscriptionOverlayService : AccessibilityService() {
             state = State.IDLE
         }
 
-        isMinimized = false
         try {
             windowManager?.removeView(bubbleView)
         } catch (_: Exception) {}
@@ -436,11 +355,11 @@ class TranscriptionOverlayService : AccessibilityService() {
                     isDragging = false
                     isLongPress = false
                     // Visual press feedback
-                    v.alpha = if (isMinimized) 0.3f else 0.6f
+                    v.alpha = 0.6f
                     v.scaleX = 0.9f
                     v.scaleY = 0.9f
-                    // Start long-press timer (only when idle and not minimized)
-                    if (state == State.IDLE && !isMinimized) {
+                    // Start long-press timer (only when idle)
+                    if (state == State.IDLE) {
                         longPressRunnable = Runnable {
                             isLongPress = true
                             v.alpha = 1.0f
@@ -460,10 +379,6 @@ class TranscriptionOverlayService : AccessibilityService() {
                         isDragging = true
                         isLongPress = false
                         longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                        // If minimized, restore on drag
-                        if (isMinimized) {
-                            isMinimized = false
-                        }
                         // Restore visual state during drag
                         v.alpha = 1.0f
                         v.scaleX = 1.0f
@@ -481,7 +396,7 @@ class TranscriptionOverlayService : AccessibilityService() {
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
                     // Restore visual state
-                    v.alpha = if (isMinimized) 0.5f else 1.0f
+                    v.alpha = 1.0f
                     v.scaleX = 1.0f
                     v.scaleY = 1.0f
 
@@ -497,65 +412,13 @@ class TranscriptionOverlayService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                    v.alpha = if (isMinimized) 0.5f else 1.0f
+                    v.alpha = 1.0f
                     v.scaleX = 1.0f
                     v.scaleY = 1.0f
                     true
                 }
                 else -> true
             }
-        }
-    }
-
-    private fun minimizeBubble() {
-        if (isMinimized || !bubbleVisible) return
-        val params = layoutParams ?: return
-        val view = bubbleView ?: return
-        val screenWidth = resources.displayMetrics.widthPixels
-        val bubbleSize = (48 * resources.displayMetrics.density).toInt()
-        val visiblePx = (12 * resources.displayMetrics.density).toInt()
-
-        savedExpandedX = params.x
-        isMinimized = true
-
-        // Determine which edge is closest
-        val centerX = params.x + bubbleSize / 2
-        val targetX = if (centerX < screenWidth / 2) -(bubbleSize - visiblePx) else screenWidth - visiblePx
-
-        ValueAnimator.ofInt(params.x, targetX).apply {
-            duration = 250
-            addUpdateListener { anim ->
-                params.x = anim.animatedValue as Int
-                try { windowManager?.updateViewLayout(view, params) } catch (_: Exception) {}
-            }
-            start()
-        }
-        ValueAnimator.ofFloat(view.alpha, 0.5f).apply {
-            duration = 250
-            addUpdateListener { view.alpha = it.animatedValue as Float }
-            start()
-        }
-    }
-
-    private fun expandBubble() {
-        if (!isMinimized || !bubbleVisible) return
-        val params = layoutParams ?: return
-        val view = bubbleView ?: return
-
-        isMinimized = false
-
-        ValueAnimator.ofInt(params.x, savedExpandedX).apply {
-            duration = 250
-            addUpdateListener { anim ->
-                params.x = anim.animatedValue as Int
-                try { windowManager?.updateViewLayout(view, params) } catch (_: Exception) {}
-            }
-            start()
-        }
-        ValueAnimator.ofFloat(view.alpha, 1.0f).apply {
-            duration = 250
-            addUpdateListener { view.alpha = it.animatedValue as Float }
-            start()
         }
     }
 
@@ -629,12 +492,6 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun onBubbleTapped() {
-        // If minimized, expand and don't start recording
-        if (isMinimized) {
-            expandBubble()
-            return
-        }
-
         // Guard against rapid double-taps
         if (tapGuard) return
         tapGuard = true
@@ -654,9 +511,6 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun startRecording() {
-        // Expand if minimized before recording
-        if (isMinimized) expandBubble()
-
         // Check microphone permission
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             != PackageManager.PERMISSION_GRANTED

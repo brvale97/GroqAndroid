@@ -32,6 +32,20 @@
             android:textColor="@color/text_secondary"
             android:textSize="14sp" />
 
+        <!-- Test text field -->
+        <EditText
+            android:id="@+id/testTextField"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:hint="Test text field — type or dictate here"
+            android:background="@drawable/input_bg"
+            android:padding="12dp"
+            android:textColor="@color/text_primary"
+            android:textColorHint="@color/text_secondary"
+            android:inputType="textMultiLine"
+            android:minLines="2" />
+
         <!-- Keyboard activation banner -->
         <LinearLayout
             android:id="@+id/activationBanner"
@@ -133,54 +147,6 @@
 
                 <androidx.appcompat.widget.SwitchCompat
                     android:id="@+id/bubbleSwitch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-
-            </LinearLayout>
-
-        </LinearLayout>
-
-        <!-- Auto-show bubble -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:orientation="vertical"
-            android:background="@drawable/input_bg"
-            android:padding="16dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical">
-
-                <LinearLayout
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:orientation="vertical">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Auto-show in chats"
-                        android:textColor="@color/text_primary"
-                        android:textSize="15sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:text="Show bubble when a text field is focused, hide when leaving"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp" />
-
-                </LinearLayout>
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/autoShowSwitch"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
 

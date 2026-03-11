@@ -274,13 +274,6 @@ class SettingsActivity : AppCompatActivity() {
             prefs.edit().putBoolean(KEY_SOUND_ENABLED, isChecked).apply()
         }
 
-        // Auto-show bubble toggle (default: off)
-        val autoShowSwitch = findViewById<SwitchCompat>(R.id.autoShowSwitch)
-        autoShowSwitch.isChecked = prefs.getBoolean(KEY_AUTO_SHOW_BUBBLE, false)
-        autoShowSwitch.setOnCheckedChangeListener { _, isChecked ->
-            prefs.edit().putBoolean(KEY_AUTO_SHOW_BUBBLE, isChecked).apply()
-        }
-
         // Whisper model picker
         val modelGroup = findViewById<com.google.android.material.chip.ChipGroup>(R.id.modelChipGroup)
         val currentModel = prefs.getString(KEY_WHISPER_MODEL, "whisper-large-v3-turbo") ?: "whisper-large-v3-turbo"
