@@ -542,7 +542,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         // Change to recording state immediately for visual feedback
         state = State.RECORDING
         updateBubbleState()
-        vibrate(30)
+        if (isHapticEnabled()) vibrate(30)
         if (isSoundEnabled()) scope.launch(Dispatchers.IO) { playDictationCue(floatArrayOf(523.25f, 659.25f)) }
 
         recordingJob = scope.launch(Dispatchers.IO) {
@@ -564,7 +564,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         try { audioRecorder.stop() } catch (_: Exception) {}
         state = State.PROCESSING
         updateBubbleState()
-        vibrate(50)
+        if (isHapticEnabled()) vibrate(50)
 
         transcriptionJob = scope.launch {
             try {
@@ -798,6 +798,14 @@ class TranscriptionOverlayService : AccessibilityService() {
     private fun isSoundEnabled(): Boolean {
         return try {
             getEncryptedPrefs().getBoolean(SettingsActivity.KEY_SOUND_ENABLED, true)
+        } catch (_: Exception) {
+            true
+        }
+    }
+
+    private fun isHapticEnabled(): Boolean {
+        return try {
+            getEncryptedPrefs().getBoolean(SettingsActivity.KEY_HAPTIC_ENABLED, true)
         } catch (_: Exception) {
             true
         }

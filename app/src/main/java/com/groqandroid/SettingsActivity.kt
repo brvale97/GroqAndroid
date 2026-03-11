@@ -38,6 +38,7 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_REPLACEMENTS = "replacements"
         const val KEY_BUBBLE_ENABLED = "bubble_enabled"
         const val KEY_SOUND_ENABLED = "sound_enabled"
+        const val KEY_HAPTIC_ENABLED = "haptic_enabled"
         const val KEY_AUTO_SHOW_BUBBLE = "auto_show_bubble"
         const val KEY_WHISPER_MODEL = "whisper_model"
         const val KEY_API_ENDPOINT = "api_endpoint"
@@ -272,6 +273,13 @@ class SettingsActivity : AppCompatActivity() {
         soundSwitch.isChecked = prefs.getBoolean(KEY_SOUND_ENABLED, true)
         soundSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_SOUND_ENABLED, isChecked).apply()
+        }
+
+        // Haptic toggle (default: on)
+        val hapticSwitch = findViewById<SwitchCompat>(R.id.hapticSwitch)
+        hapticSwitch.isChecked = prefs.getBoolean(KEY_HAPTIC_ENABLED, true)
+        hapticSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_HAPTIC_ENABLED, isChecked).apply()
         }
 
         // Whisper model picker
