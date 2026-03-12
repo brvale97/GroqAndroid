@@ -625,6 +625,10 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private fun insertTextAtCursor(text: String) {
         try {
+            // Always copy to clipboard so the user can paste manually if needed
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("transcription", text))
+
             val focusedNode = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             if (focusedNode == null) {
                 // No focused node found — fallback to clipboard paste
@@ -686,28 +690,17 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private fun pasteViaClipboard(text: String) {
         val clipboard = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        // Save current clipboard content to restore later
-        val previousClip = clipboard.primaryClip
-        // Set our text
+        // Set our text (kept on clipboard so user can paste manually if needed)
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("transcription", text))
         // Small delay to let clipboard update, then paste
         Handler(Looper.getMainLooper()).postDelayed({
             try {
-                // Simulate Ctrl+V paste via accessibility global action
-                // Use dispatchGesture or key events - but the most reliable way is performGlobalAction
-                // However, there's no global paste action. Instead, find the focused node and paste.
                 val node = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 if (node != null) {
                     node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
                     @Suppress("DEPRECATION")
                     node.recycle()
                 }
-                // Restore previous clipboard after a short delay
-                Handler(Looper.getMainLooper()).postDelayed({
-                    try {
-                        if (previousClip != null) clipboard.setPrimaryClip(previousClip)
-                    } catch (_: Exception) {}
-                }, 500)
             } catch (_: Exception) {}
         }, 100)
     }
