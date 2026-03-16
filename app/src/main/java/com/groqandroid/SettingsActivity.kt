@@ -297,43 +297,7 @@ class SettingsActivity : AppCompatActivity() {
         bubbleSwitch.isChecked = isAccessibilityServiceEnabled() && prefs.getBoolean(KEY_BUBBLE_ENABLED, false)
         bubbleSwitch.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
-                if (!isAccessibilityServiceEnabled()) {
-                    bubbleSwitch.isChecked = false
-                    androidx.appcompat.app.AlertDialog.Builder(this)
-                        .setTitle("Enable Accessibility Service")
-                        .setMessage(
-                            "To use the floating bubble, enable the GroqAndroid Voice Input accessibility service.\n\n" +
-                            "If it shows \"Controlled by restricted setting\" or \"App was denied access\":\n\n" +
-                            "1. Go to Settings → Apps → GroqAndroid Voice Input\n" +
-                            "2. Tap the ⋮ menu (top right)\n" +
-                            "3. Select \"Allow restricted settings\"\n" +
-                            "4. Confirm with your PIN/fingerprint\n" +
-                            "5. Then go back and enable the accessibility service"
-                        )
-                        .setPositiveButton("Open Accessibility Settings") { _, _ ->
-                            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                        }
-                        .setNeutralButton("Open App Settings") { _, _ ->
-                            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                } else if (!Settings.canDrawOverlays(this)) {
-                    bubbleSwitch.isChecked = false
-                    Toast.makeText(this, "Overlay permission needed for the floating bubble", Toast.LENGTH_SHORT).show()
-                    startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-                } else {
-                    // Request notification permission on Android 13+
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
-                        }
-                    }
-                    prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, true).apply()
-                    sendBroadcast(Intent(TranscriptionOverlayService.ACTION_TOGGLE_BUBBLE).apply {
-                        setPackage(packageName)
-                    })
-                }
+                enableBubbleWithPermissionCheck()
             } else {
                 prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, false).apply()
                 sendBroadcast(Intent(TranscriptionOverlayService.ACTION_TOGGLE_BUBBLE).apply {
@@ -361,6 +325,62 @@ class SettingsActivity : AppCompatActivity() {
                 requestBatteryOptimizationExemptionIfNeeded()
             }
         }
+    }
+
+    /**
+     * Check all required permissions and only prompt for the first missing one.
+     * If all permissions are already granted, directly enable the bubble.
+     */
+    private fun enableBubbleWithPermissionCheck() {
+        // 1. Accessibility service must be enabled
+        if (!isAccessibilityServiceEnabled()) {
+            bubbleSwitch.isChecked = false
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Enable Accessibility Service")
+                .setMessage(
+                    "To use the floating bubble, enable the GroqAndroid Voice Input accessibility service.\n\n" +
+                    "If it shows \"Controlled by restricted setting\" or \"App was denied access\":\n\n" +
+                    "1. Go to Settings → Apps → GroqAndroid Voice Input\n" +
+                    "2. Tap the ⋮ menu (top right)\n" +
+                    "3. Select \"Allow restricted settings\"\n" +
+                    "4. Confirm with your PIN/fingerprint\n" +
+                    "5. Then go back and enable the accessibility service"
+                )
+                .setPositiveButton("Open Accessibility Settings") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNeutralButton("Open App Settings") { _, _ ->
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            return
+        }
+
+        // 2. Overlay permission
+        if (!Settings.canDrawOverlays(this)) {
+            bubbleSwitch.isChecked = false
+            Toast.makeText(this, "Overlay permission needed for the floating bubble", Toast.LENGTH_SHORT).show()
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+            return
+        }
+
+        // 3. Notification permission (Android 13+) — request but don't block
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1001)
+            }
+        }
+
+        // 4. Battery optimization — request in background but don't block
+        requestBatteryOptimizationExemptionIfNeeded()
+
+        // All critical permissions granted — enable the bubble directly
+        val prefs = getEncryptedPrefs()
+        prefs.edit().putBoolean(KEY_BUBBLE_ENABLED, true).apply()
+        sendBroadcast(Intent(TranscriptionOverlayService.ACTION_TOGGLE_BUBBLE).apply {
+            setPackage(packageName)
+        })
     }
 
     private fun requestBatteryOptimizationExemptionIfNeeded() {

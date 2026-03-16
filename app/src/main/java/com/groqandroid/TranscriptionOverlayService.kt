@@ -6,6 +6,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.Service
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
@@ -14,6 +15,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Bundle
@@ -56,7 +58,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         private const val KEY_BUBBLE_X = "bubble_x"
         private const val KEY_BUBBLE_Y = "bubble_y"
         private const val TAP_THRESHOLD_DP = 10
-        private const val KEEPALIVE_INTERVAL_MS = 60_000L
+        private const val KEEPALIVE_INTERVAL_MS = 30_000L
 
         val LANGUAGE_OPTIONS = listOf(
             "Auto-detect" to null,
@@ -174,12 +176,23 @@ class TranscriptionOverlayService : AccessibilityService() {
         keepaliveHandler.postDelayed(keepaliveRunnable, KEEPALIVE_INTERVAL_MS)
     }
 
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        return Service.START_STICKY
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // No-op — required override for AccessibilityService
     }
 
     override fun onInterrupt() {
-        // Service interrupted — restart keepalive check after delay
+        // Service interrupted — immediately try to re-show the bubble
+        if (bubbleEnabled) {
+            if (bubbleView?.windowToken == null) {
+                bubbleVisible = false
+                showBubble()
+            }
+        }
+        // Also restart keepalive check
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         keepaliveHandler.postDelayed(keepaliveRunnable, 5_000)
     }
@@ -187,6 +200,8 @@ class TranscriptionOverlayService : AccessibilityService() {
     override fun onDestroy() {
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
+        @Suppress("DEPRECATION")
+        stopForeground(true)
         hideBubble()
         try {
             if (state == State.RECORDING) {
@@ -213,21 +228,20 @@ class TranscriptionOverlayService : AccessibilityService() {
             .createNotificationChannel(channel)
     }
 
-    private fun showNotification(bubbleHidden: Boolean = false) {
+    private fun buildNotification(bubbleHidden: Boolean = false): Notification {
         val stopIntent = Intent(ACTION_STOP).apply { setPackage(packageName) }
         val stopPending = PendingIntent.getBroadcast(
             this, 0, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (bubbleHidden) {
+        return if (bubbleHidden) {
             val showIntent = Intent(ACTION_SHOW_BUBBLE).apply { setPackage(packageName) }
             val showPending = PendingIntent.getBroadcast(
                 this, 1, showIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
-            // Use the tap action on the notification itself to show the bubble
-            val notification = Notification.Builder(this, CHANNEL_ID)
+            Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_mic)
                 .setContentTitle("Floating microphone hidden")
                 .setContentText("Tap to show the floating microphone")
@@ -236,21 +250,21 @@ class TranscriptionOverlayService : AccessibilityService() {
                 .addAction(Notification.Action.Builder(null, "Stop", stopPending).build())
                 .setOngoing(true)
                 .build()
-
-            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID, notification)
         } else {
-            val notification = Notification.Builder(this, CHANNEL_ID)
+            Notification.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_mic)
                 .setContentTitle("GroqAndroid Voice Input")
                 .setContentText("Floating microphone active")
                 .addAction(Notification.Action.Builder(null, "Stop", stopPending).build())
                 .setOngoing(true)
                 .build()
-
-            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun showNotification(bubbleHidden: Boolean = false) {
+        val notification = buildNotification(bubbleHidden)
+        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        nm.notify(NOTIFICATION_ID, notification)
     }
 
     private fun hideNotification() {
@@ -303,7 +317,13 @@ class TranscriptionOverlayService : AccessibilityService() {
         try {
             windowManager?.addView(bubbleView, layoutParams)
             bubbleVisible = true
-            showNotification()
+            // Start as foreground service to prevent Android from killing us
+            val notification = buildNotification(bubbleHidden = false)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
         } catch (e: Exception) {
             Toast.makeText(this, "Could not show bubble: ${e.message}", Toast.LENGTH_SHORT).show()
         }
@@ -325,11 +345,14 @@ class TranscriptionOverlayService : AccessibilityService() {
         bubbleVisible = false
 
         if (bubbleEnabled) {
-            // Manual hide: show "tap to show" notification
-            hideNotification()
-            showNotification(bubbleHidden = true)
+            // Manual hide: update notification to show "tap to show"
+            val notification = buildNotification(bubbleHidden = true)
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, notification)
         } else {
-            // Bubble disabled entirely
+            // Bubble disabled entirely — stop foreground service
+            @Suppress("DEPRECATION")
+            stopForeground(true)
             hideNotification()
         }
     }
