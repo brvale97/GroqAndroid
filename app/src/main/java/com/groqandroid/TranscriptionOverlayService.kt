@@ -21,6 +21,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -82,6 +83,7 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private var wakeLock: PowerManager.WakeLock? = null
     private var windowManager: WindowManager? = null
     private var bubbleView: View? = null
     private var layoutParams: WindowManager.LayoutParams? = null
@@ -143,6 +145,10 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // WakeLock to prevent MIUI from killing the service
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GroqAndroid::AccessibilityWakeLock")
+        wakeLock?.acquire()
         audioRecorder = AudioRecorder(cacheDir)
         audioRecorder.onMaxDurationReached = {
             Handler(Looper.getMainLooper()).post {
@@ -198,6 +204,7 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
         @Suppress("DEPRECATION")
