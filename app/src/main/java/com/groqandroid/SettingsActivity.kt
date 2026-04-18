@@ -42,6 +42,7 @@ class SettingsActivity : AppCompatActivity() {
         const val KEY_AUTO_SHOW_BUBBLE = "auto_show_bubble"
         const val KEY_WHISPER_MODEL = "whisper_model"
         const val KEY_API_ENDPOINT = "api_endpoint"
+        const val KEY_CHAT_MODE = "chat_mode"
     }
 
     private lateinit var activationBanner: LinearLayout
@@ -273,6 +274,13 @@ class SettingsActivity : AppCompatActivity() {
         soundSwitch.isChecked = prefs.getBoolean(KEY_SOUND_ENABLED, true)
         soundSwitch.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean(KEY_SOUND_ENABLED, isChecked).apply()
+        }
+
+        // Chat mode toggle (default: off)
+        val chatModeSwitch = findViewById<SwitchCompat>(R.id.chatModeSwitch)
+        chatModeSwitch.isChecked = prefs.getBoolean(KEY_CHAT_MODE, false)
+        chatModeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean(KEY_CHAT_MODE, isChecked).apply()
         }
 
         // Haptic toggle (default: on)

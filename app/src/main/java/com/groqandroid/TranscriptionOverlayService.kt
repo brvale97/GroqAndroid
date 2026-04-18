@@ -614,7 +614,10 @@ class TranscriptionOverlayService : AccessibilityService() {
                     val dictionary = getDictionary()
                     val model = getWhisperModel()
                     val rawText = apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
-                    val text = applyReplacements(rawText)
+                    var text = applyReplacements(rawText)
+                    if (isChatModeEnabled()) {
+                        text = stripTrailingPeriod(text)
+                    }
 
                     if (text.isNotEmpty()) {
                         insertTextAtCursor(text + " ")
@@ -884,6 +887,22 @@ class TranscriptionOverlayService : AccessibilityService() {
             result = pattern.replace(result, Regex.escapeReplacement(to))
         }
         return result
+    }
+
+    private fun isChatModeEnabled(): Boolean {
+        return try {
+            getEncryptedPrefs().getBoolean(SettingsActivity.KEY_CHAT_MODE, false)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun stripTrailingPeriod(text: String): String {
+        val trimmed = text.trimEnd()
+        if (trimmed.endsWith(".") && !trimmed.endsWith("..")) {
+            return trimmed.dropLast(1)
+        }
+        return text
     }
 
     private fun getEncryptedPrefs() = EncryptedSharedPreferences.create(

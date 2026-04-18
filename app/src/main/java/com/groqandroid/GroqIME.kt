@@ -362,7 +362,10 @@ class GroqIME : InputMethodService() {
                 val rawText = withTimeout(60_000L) {
                     apiClient?.transcribe(audioRecorder.outputFile, language, dictionary, model) ?: ""
                 }
-                val text = applyReplacements(rawText)
+                var text = applyReplacements(rawText)
+                if (isChatModeEnabled()) {
+                    text = stripTrailingPeriod(text)
+                }
                 val ic = currentInputConnection
                 if (text.isNotEmpty() && ic != null) {
                     ic.commitText(text + " ", 1)
@@ -487,6 +490,22 @@ class GroqIME : InputMethodService() {
             result = pattern.replace(result, Regex.escapeReplacement(to))
         }
         return result
+    }
+
+    private fun isChatModeEnabled(): Boolean {
+        return try {
+            getPrefs()?.getBoolean(SettingsActivity.KEY_CHAT_MODE, false) == true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun stripTrailingPeriod(text: String): String {
+        val trimmed = text.trimEnd()
+        if (trimmed.endsWith(".") && !trimmed.endsWith("..")) {
+            return trimmed.dropLast(1)
+        }
+        return text
     }
 
     private fun getCustomEndpoint(): String? {
