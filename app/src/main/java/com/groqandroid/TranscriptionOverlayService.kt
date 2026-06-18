@@ -16,24 +16,26 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
-import android.view.ContextThemeWrapper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.ImageView
-import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
@@ -46,6 +48,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import kotlin.math.abs
+import kotlin.math.sin
 
 class TranscriptionOverlayService : AccessibilityService() {
 
@@ -59,6 +62,13 @@ class TranscriptionOverlayService : AccessibilityService() {
         private const val KEY_BUBBLE_X = "bubble_x"
         private const val KEY_BUBBLE_Y = "bubble_y"
         private const val TAP_THRESHOLD_DP = 10
+        private const val TOUCH_TARGET_DP = 56
+        private const val IDLE_ALPHA = 0.32f
+        private const val IDLE_COLLAPSE_DELAY_MS = 2_000L
+        private const val LONG_PRESS_TO_MOVE_MS = 420L
+        private const val TOP_AVOID_DP = 64
+        private const val BOTTOM_AVOID_DP = 168
+        private const val SWIPE_THRESHOLD_DP = 28
         private const val KEEPALIVE_INTERVAL_MS = 30_000L
 
         val LANGUAGE_OPTIONS = listOf(
@@ -94,7 +104,9 @@ class TranscriptionOverlayService : AccessibilityService() {
     private var transcriptionJob: Job? = null
 
     private enum class State { IDLE, RECORDING, PROCESSING }
+    private enum class Edge { LEFT, RIGHT }
     private var state = State.IDLE
+    private var currentEdge = Edge.RIGHT
     @Volatile
     private var tapGuard = false
     private var lastInsertedText: String? = null
@@ -104,6 +116,8 @@ class TranscriptionOverlayService : AccessibilityService() {
     private var tapThresholdPx = 10f // computed in onServiceConnected
     private var longPressHandler = Handler(Looper.getMainLooper())
     private var longPressRunnable: Runnable? = null
+    private val idleHandler = Handler(Looper.getMainLooper())
+    private val idleCollapseRunnable = Runnable { collapseTab() }
 
     // Keepalive: re-attach bubble if OS removes the view
     private val keepaliveHandler = Handler(Looper.getMainLooper())
@@ -206,6 +220,8 @@ class TranscriptionOverlayService : AccessibilityService() {
     override fun onDestroy() {
         try { if (wakeLock?.isHeld == true) wakeLock?.release() } catch (_: Exception) {}
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
+        idleHandler.removeCallbacks(idleCollapseRunnable)
+        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
         try { unregisterReceiver(commandReceiver) } catch (_: Exception) {}
         @Suppress("DEPRECATION")
         stopForeground(true)
@@ -281,15 +297,34 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     // --- Bubble overlay ---
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun touchTargetPx(): Int = dp(TOUCH_TARGET_DP)
+
+    private fun clampBubbleY(y: Int): Int {
+        val screenHeight = resources.displayMetrics.heightPixels
+        val top = dp(TOP_AVOID_DP)
+        val bottom = screenHeight - dp(BOTTOM_AVOID_DP) - touchTargetPx()
+        val maxY = bottom.coerceAtLeast(top)
+        return y.coerceIn(top, maxY)
+    }
+
+    private fun edgeForX(x: Int): Edge {
+        val screenWidth = resources.displayMetrics.widthPixels
+        return if (x + touchTargetPx() / 2 < screenWidth / 2) Edge.LEFT else Edge.RIGHT
+    }
+
     fun showBubble() {
         if (bubbleVisible) return
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        val bubbleSize = (48 * resources.displayMetrics.density).toInt()
+        val touchTarget = touchTargetPx()
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val savedX = prefs.getInt(KEY_BUBBLE_X, 0)
-        val savedY = prefs.getInt(KEY_BUBBLE_Y, resources.displayMetrics.heightPixels / 3)
+        val defaultX = resources.displayMetrics.widthPixels - touchTarget
+        val savedX = if (prefs.contains(KEY_BUBBLE_X)) prefs.getInt(KEY_BUBBLE_X, defaultX) else defaultX
+        val savedY = prefs.getInt(KEY_BUBBLE_Y, resources.displayMetrics.heightPixels / 2 - touchTarget / 2)
+        currentEdge = edgeForX(savedX)
 
         // MIUI/Xiaomi doesn't deliver touch events for TYPE_ACCESSIBILITY_OVERLAY.
         // Use TYPE_APPLICATION_OVERLAY when overlay permission is granted, fall back otherwise.
@@ -300,23 +335,24 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
 
         layoutParams = WindowManager.LayoutParams(
-            bubbleSize, bubbleSize,
+            touchTarget, touchTarget,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = savedX
-            y = savedY
+            x = if (currentEdge == Edge.LEFT) 0 else resources.displayMetrics.widthPixels - touchTarget
+            y = clampBubbleY(savedY)
         }
 
-        bubbleView = ImageView(this).apply {
-            setImageResource(R.drawable.ic_mic)
-            setBackgroundResource(R.drawable.bubble_bg)
-            val pad = (10 * resources.displayMetrics.density).toInt()
-            setPadding(pad, pad, pad, pad)
-            elevation = 8 * resources.displayMetrics.density
+        bubbleView = WhisperTabView(this).apply {
+            edge = currentEdge
+            visualState = state
+            expanded = state != State.IDLE
+            alpha = if (state == State.IDLE) IDLE_ALPHA else 1.0f
+            elevation = 0f
             isClickable = true
+            contentDescription = "Whisper tab"
         }
 
         setupTouchListener()
@@ -338,6 +374,8 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     fun hideBubble() {
         if (!bubbleVisible) return
+        idleHandler.removeCallbacks(idleCollapseRunnable)
+        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
 
         // Stop recording if active
         if (state == State.RECORDING) {
@@ -372,8 +410,11 @@ class TranscriptionOverlayService : AccessibilityService() {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
-        var isDragging = false
-        var isLongPress = false
+        var moved = false
+        var moveEnabled = false
+        var longPressTriggered = false
+        var hideBySwipe = false
+        var revealBySwipe = false
 
         view.setOnTouchListener { v, event ->
             when (event.actionMasked) {
@@ -382,41 +423,49 @@ class TranscriptionOverlayService : AccessibilityService() {
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
-                    isDragging = false
-                    isLongPress = false
-                    // Visual press feedback
-                    v.alpha = 0.6f
-                    v.scaleX = 0.9f
-                    v.scaleY = 0.9f
-                    // Start long-press timer (only when idle)
+                    moved = false
+                    moveEnabled = false
+                    longPressTriggered = false
+                    hideBySwipe = false
+                    revealBySwipe = false
+                    idleHandler.removeCallbacks(idleCollapseRunnable)
+                    expandTab()
+
+                    // Long press turns the tab into a draggable handle.
                     if (state == State.IDLE) {
                         longPressRunnable = Runnable {
-                            isLongPress = true
-                            v.alpha = 1.0f
-                            v.scaleX = 1.0f
-                            v.scaleY = 1.0f
+                            longPressTriggered = true
+                            moveEnabled = true
                             vibrate(30)
-                            showLanguagePopup(v)
                         }
-                        longPressHandler.postDelayed(longPressRunnable!!, 600)
+                        longPressHandler.postDelayed(longPressRunnable!!, LONG_PRESS_TO_MOVE_MS)
                     }
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = abs(event.rawX - initialTouchX)
-                    val dy = abs(event.rawY - initialTouchY)
-                    if (dx > tapThresholdPx || dy > tapThresholdPx) {
-                        isDragging = true
-                        isLongPress = false
-                        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                        // Restore visual state during drag
-                        v.alpha = 1.0f
-                        v.scaleX = 1.0f
-                        v.scaleY = 1.0f
+                    val deltaX = event.rawX - initialTouchX
+                    val deltaY = event.rawY - initialTouchY
+                    val absX = abs(deltaX)
+                    val absY = abs(deltaY)
+                    val horizontalSwipe = absX > dp(SWIPE_THRESHOLD_DP) && absX > absY * 1.4f
+
+                    if (absX > tapThresholdPx || absY > tapThresholdPx) {
+                        moved = true
                     }
-                    if (isDragging) {
-                        params.x = initialX + (event.rawX - initialTouchX).toInt()
-                        params.y = initialY + (event.rawY - initialTouchY).toInt()
+
+                    if (!moveEnabled && state == State.IDLE && horizontalSwipe) {
+                        val inward = (currentEdge == Edge.LEFT && deltaX > 0) ||
+                            (currentEdge == Edge.RIGHT && deltaX < 0)
+                        val outward = (currentEdge == Edge.LEFT && deltaX < 0) ||
+                            (currentEdge == Edge.RIGHT && deltaX > 0)
+                        revealBySwipe = inward
+                        hideBySwipe = outward
+                        longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+                    }
+
+                    if (moveEnabled) {
+                        params.x = initialX + deltaX.toInt()
+                        params.y = clampBubbleY(initialY + deltaY.toInt())
                         try {
                             windowManager?.updateViewLayout(v, params)
                         } catch (_: Exception) {}
@@ -425,26 +474,27 @@ class TranscriptionOverlayService : AccessibilityService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                    // Restore visual state
-                    v.alpha = 1.0f
-                    v.scaleX = 1.0f
-                    v.scaleY = 1.0f
 
-                    if (isLongPress) {
-                        // Long press handled — language popup is shown
-                    } else if (!isDragging) {
+                    if (hideBySwipe) {
+                        hideBubble()
+                    } else if (moveEnabled && moved) {
+                        snapToEdge()
+                        savePosition()
+                        scheduleIdleCollapse()
+                    } else if (revealBySwipe || longPressTriggered) {
+                        snapToEdge()
+                        savePosition()
+                        scheduleIdleCollapse()
+                    } else if (!moved) {
                         onBubbleTapped()
                     } else {
-                        snapToEdge()
+                        scheduleIdleCollapse()
                     }
-                    savePosition()
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
-                    v.alpha = 1.0f
-                    v.scaleX = 1.0f
-                    v.scaleY = 1.0f
+                    scheduleIdleCollapse()
                     true
                 }
                 else -> true
@@ -452,49 +502,42 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
     }
 
-    private fun showLanguagePopup(anchor: View) {
-        try {
-            val wrapper = ContextThemeWrapper(this, com.google.android.material.R.style.Theme_MaterialComponents_DayNight_NoActionBar)
-            val popup = PopupMenu(wrapper, anchor)
-            LANGUAGE_OPTIONS.forEachIndexed { index, (name, _) ->
-                popup.menu.add(0, index, index, name)
-            }
-            // Add "Verbergen" as last item
-            popup.menu.add(0, LANGUAGE_OPTIONS.size, LANGUAGE_OPTIONS.size, "Verbergen")
-
-            popup.setOnMenuItemClickListener { item ->
-                if (item.itemId == LANGUAGE_OPTIONS.size) {
-                    // "Verbergen" selected
-                    hideBubble()
-                } else {
-                    val (name, code) = LANGUAGE_OPTIONS[item.itemId]
-                    try {
-                        val prefs = getEncryptedPrefs()
-                        if (code != null) {
-                            prefs.edit().putString(SettingsActivity.KEY_LANGUAGE, code).apply()
-                        } else {
-                            prefs.edit().remove(SettingsActivity.KEY_LANGUAGE).apply()
-                        }
-                        Toast.makeText(this, name, Toast.LENGTH_SHORT).show()
-                    } catch (_: Exception) {}
-                }
-                true
-            }
-            popup.show()
-        } catch (_: Exception) {}
+    private fun expandTab() {
+        val tab = bubbleView as? WhisperTabView ?: return
+        tab.animate().cancel()
+        tab.expanded = true
+        tab.alpha = 1.0f
     }
 
     private fun snapToEdge() {
         val params = layoutParams ?: return
         val screenWidth = resources.displayMetrics.widthPixels
-        val bubbleSize = (48 * resources.displayMetrics.density).toInt()
-        val centerX = params.x + bubbleSize / 2
+        val touchTarget = touchTargetPx()
+        val centerX = params.x + touchTarget / 2
 
-        params.x = if (centerX < screenWidth / 2) 0 else screenWidth - bubbleSize
+        currentEdge = if (centerX < screenWidth / 2) Edge.LEFT else Edge.RIGHT
+        params.x = if (currentEdge == Edge.LEFT) 0 else screenWidth - touchTarget
+        params.y = clampBubbleY(params.y)
+        (bubbleView as? WhisperTabView)?.edge = currentEdge
 
         try {
             windowManager?.updateViewLayout(bubbleView, params)
         } catch (_: Exception) {}
+    }
+
+    private fun collapseTab() {
+        if (state != State.IDLE) return
+        val tab = bubbleView as? WhisperTabView ?: return
+        snapToEdge()
+        tab.expanded = false
+        tab.animate().alpha(IDLE_ALPHA).setDuration(180).start()
+    }
+
+    private fun scheduleIdleCollapse() {
+        idleHandler.removeCallbacks(idleCollapseRunnable)
+        if (state == State.IDLE) {
+            idleHandler.postDelayed(idleCollapseRunnable, IDLE_COLLAPSE_DELAY_MS)
+        }
     }
 
     private fun savePosition() {
@@ -554,6 +597,7 @@ class TranscriptionOverlayService : AccessibilityService() {
             } catch (e: Exception) {
                 Toast.makeText(this, "Could not request permission: ${e.message}", Toast.LENGTH_SHORT).show()
             }
+            scheduleIdleCollapse()
             return
         }
 
@@ -564,6 +608,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
         if (apiKey.isNullOrEmpty()) {
             Toast.makeText(this, "Set up an API key first in the GroqAndroid app", Toast.LENGTH_LONG).show()
+            scheduleIdleCollapse()
             return
         }
         val endpoint = getCustomEndpoint()
@@ -644,14 +689,14 @@ class TranscriptionOverlayService : AccessibilityService() {
     }
 
     private fun updateBubbleState() {
-        val view = bubbleView ?: return
-        view.setBackgroundResource(
-            when (state) {
-                State.IDLE -> R.drawable.bubble_bg
-                State.RECORDING -> R.drawable.mic_button_recording
-                State.PROCESSING -> R.drawable.mic_button_processing
-            }
-        )
+        val tab = bubbleView as? WhisperTabView ?: return
+        tab.visualState = state
+        if (state == State.IDLE) {
+            scheduleIdleCollapse()
+        } else {
+            idleHandler.removeCallbacks(idleCollapseRunnable)
+            expandTab()
+        }
     }
 
     // --- Text insertion via accessibility ---
@@ -800,6 +845,118 @@ class TranscriptionOverlayService : AccessibilityService() {
             lock.await(1000, java.util.concurrent.TimeUnit.MILLISECONDS)
             audioTrack.release()
         } catch (_: Exception) {}
+    }
+
+    private class WhisperTabView(context: Context) : View(context) {
+        var edge: Edge = Edge.RIGHT
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        var visualState: State = State.IDLE
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        var expanded: Boolean = false
+            set(value) {
+                field = value
+                invalidate()
+            }
+
+        private val density = resources.displayMetrics.density
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val rect = RectF()
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (expanded || visualState != State.IDLE) {
+                drawExpanded(canvas)
+            } else {
+                drawCollapsed(canvas)
+            }
+
+            if (visualState == State.RECORDING) {
+                postInvalidateOnAnimation()
+            }
+        }
+
+        private fun drawCollapsed(canvas: Canvas) {
+            val visibleWidth = dp(12f)
+            val visibleHeight = dp(44f)
+            val left = if (edge == Edge.LEFT) 0f else width - visibleWidth
+            val top = (height - visibleHeight) / 2f
+
+            fillPaint.color = Color.rgb(95, 99, 104)
+            rect.set(left, top, left + visibleWidth, top + visibleHeight)
+            canvas.drawRoundRect(rect, visibleWidth / 2f, visibleWidth / 2f, fillPaint)
+
+            fillPaint.color = Color.WHITE
+            fillPaint.alpha = 220
+            val dotX = if (edge == Edge.LEFT) left + visibleWidth * 0.55f else left + visibleWidth * 0.45f
+            canvas.drawCircle(dotX, height / 2f, dp(2.2f), fillPaint)
+            fillPaint.alpha = 255
+        }
+
+        private fun drawExpanded(canvas: Canvas) {
+            val diameter = dp(52f)
+            val radius = diameter / 2f
+            val cx = if (edge == Edge.LEFT) radius else width - radius
+            val cy = height / 2f
+
+            fillPaint.color = when (visualState) {
+                State.IDLE -> Color.rgb(95, 99, 104)
+                State.RECORDING -> Color.rgb(211, 47, 47)
+                State.PROCESSING -> Color.rgb(245, 124, 0)
+            }
+            canvas.drawCircle(cx, cy, radius, fillPaint)
+
+            if (visualState == State.RECORDING) {
+                val progress = (SystemClock.uptimeMillis() % 1200L).toFloat() / 1200f
+                val pulse = (sin(progress * Math.PI * 2).toFloat() + 1f) / 2f
+                strokePaint.color = Color.WHITE
+                strokePaint.alpha = (90 + pulse * 80).toInt()
+                strokePaint.strokeWidth = dp(1.8f)
+                canvas.drawCircle(cx, cy, radius - dp(3f), strokePaint)
+                strokePaint.alpha = 255
+            }
+
+            drawMicIcon(canvas, cx, cy)
+        }
+
+        private fun drawMicIcon(canvas: Canvas, cx: Float, cy: Float) {
+            iconPaint.style = Paint.Style.STROKE
+            iconPaint.strokeWidth = dp(2f)
+            iconPaint.alpha = 245
+
+            val bodyHalfWidth = dp(4.5f)
+            val bodyTop = cy - dp(12f)
+            val bodyBottom = cy + dp(4.5f)
+            rect.set(cx - bodyHalfWidth, bodyTop, cx + bodyHalfWidth, bodyBottom)
+            canvas.drawRoundRect(rect, bodyHalfWidth, bodyHalfWidth, iconPaint)
+
+            rect.set(cx - dp(11f), cy - dp(3f), cx + dp(11f), cy + dp(15f))
+            canvas.drawArc(rect, 0f, 180f, false, iconPaint)
+            canvas.drawLine(cx, cy + dp(13f), cx, cy + dp(18f), iconPaint)
+            canvas.drawLine(cx - dp(5.5f), cy + dp(18f), cx + dp(5.5f), cy + dp(18f), iconPaint)
+
+            iconPaint.alpha = 255
+        }
+
+        private fun dp(value: Float): Float = value * density
     }
 
     // --- Settings helpers (same pattern as GroqIME) ---
