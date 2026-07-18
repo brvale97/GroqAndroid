@@ -5,12 +5,11 @@ local.properties
 .idea/
 .DS_Store
 app/build/
-keystore.jks
+*.jks
 *.apk
 *.rar
 .claude/
 app/release/
-keystore_new.jks
 hs_err_*.log
 replay_*.log
 *.png
