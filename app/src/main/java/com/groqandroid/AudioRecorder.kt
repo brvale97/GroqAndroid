@@ -1,8 +1,12 @@
 package com.groqandroid
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
@@ -14,7 +18,10 @@ import java.io.RandomAccessFile
  * Records audio from the microphone and saves it as a WAV file.
  * Format: 16kHz, mono, PCM 16-bit (optimal for Whisper).
  */
-class AudioRecorder(private val cacheDir: File) {
+class AudioRecorder(
+    private val context: Context,
+    private val cacheDir: File
+) {
 
     companion object {
         private const val SAMPLE_RATE = 16_000
@@ -44,6 +51,12 @@ class AudioRecorder(private val cacheDir: File) {
      * Must be called from a coroutine — runs on IO dispatcher.
      */
     suspend fun record() = withContext(Dispatchers.IO) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            throw SecurityException("Microphone permission is not granted")
+        }
+
         val bufferSize = maxOf(
             AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT),
             4096

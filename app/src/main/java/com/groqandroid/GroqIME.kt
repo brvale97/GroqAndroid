@@ -73,7 +73,7 @@ class GroqIME : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
-        audioRecorder = AudioRecorder(cacheDir)
+        audioRecorder = AudioRecorder(this, cacheDir)
         audioRecorder.onMaxDurationReached = {
             Handler(Looper.getMainLooper()).post {
                 setStatus("Max duration reached (2 min)")

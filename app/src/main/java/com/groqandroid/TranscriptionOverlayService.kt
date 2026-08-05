@@ -16,6 +16,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -33,6 +34,7 @@ import android.os.VibratorManager
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -48,6 +50,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class TranscriptionOverlayService : AccessibilityService() {
@@ -61,13 +64,16 @@ class TranscriptionOverlayService : AccessibilityService() {
         private const val PREFS_NAME = "bubble_prefs"
         private const val KEY_BUBBLE_X = "bubble_x"
         private const val KEY_BUBBLE_Y = "bubble_y"
+        private const val KEY_BUBBLE_EDGE_LEFT = "bubble_edge_left"
+        private const val KEY_BUBBLE_Y_FRACTION = "bubble_y_fraction"
         private const val TAP_THRESHOLD_DP = 10
         private const val TOUCH_TARGET_DP = 56
+        private const val COLLAPSED_TOUCH_TARGET_DP = 24
         private const val IDLE_ALPHA = 0.32f
         private const val IDLE_COLLAPSE_DELAY_MS = 2_000L
         private const val LONG_PRESS_TO_MOVE_MS = 420L
         private const val TOP_AVOID_DP = 64
-        private const val BOTTOM_AVOID_DP = 168
+        private const val BOTTOM_MARGIN_DP = 8
         private const val SWIPE_THRESHOLD_DP = 28
         private const val KEEPALIVE_INTERVAL_MS = 30_000L
 
@@ -113,6 +119,8 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private var bubbleVisible = false
     private var bubbleEnabled = false // user toggle from settings
+    private var lastBubbleTop = 0
+    private var lastBubbleBottom = 0
     private var tapThresholdPx = 10f // computed in onServiceConnected
     private var longPressHandler = Handler(Looper.getMainLooper())
     private var longPressRunnable: Runnable? = null
@@ -163,7 +171,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GroqAndroid::AccessibilityWakeLock")
         wakeLock?.acquire()
-        audioRecorder = AudioRecorder(cacheDir)
+        audioRecorder = AudioRecorder(this, cacheDir)
         audioRecorder.onMaxDurationReached = {
             Handler(Looper.getMainLooper()).post {
                 Toast.makeText(this, "Max duration reached (2 min)", Toast.LENGTH_SHORT).show()
@@ -179,11 +187,12 @@ class TranscriptionOverlayService : AccessibilityService() {
             addAction(ACTION_TOGGLE_BUBBLE)
             addAction(ACTION_SHOW_BUBBLE)
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(commandReceiver, filter, RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(commandReceiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            this,
+            commandReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         // Show bubble if enabled in settings
         val prefs = try { getEncryptedPrefs() } catch (_: Exception) { null }
@@ -215,6 +224,23 @@ class TranscriptionOverlayService : AccessibilityService() {
         // Also restart keepalive check
         keepaliveHandler.removeCallbacks(keepaliveRunnable)
         keepaliveHandler.postDelayed(keepaliveRunnable, 5_000)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        val params = layoutParams
+        val verticalFraction = if (params != null) {
+            verticalFraction(params.y, lastBubbleTop, lastBubbleBottom)
+        } else {
+            0.5f
+        }
+
+        super.onConfigurationChanged(newConfig)
+
+        // Window metrics settle after the configuration callback. Re-anchor the tab to
+        // its logical edge on the next UI pass instead of retaining portrait pixels.
+        bubbleView?.post {
+            repositionBubble(verticalFraction)
+        }
     }
 
     override fun onDestroy() {
@@ -301,16 +327,113 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private fun touchTargetPx(): Int = dp(TOUCH_TARGET_DP)
 
+    private fun collapsedTouchTargetPx(): Int = dp(COLLAPSED_TOUCH_TARGET_DP)
+
+    private fun resizeBubbleWidth(width: Int) {
+        val view = bubbleView ?: return
+        val params = layoutParams ?: return
+        if (params.width == width) return
+
+        params.width = width
+        params.height = touchTargetPx()
+        params.x = edgeX(currentEdge, width)
+        params.y = clampBubbleY(params.y)
+
+        try {
+            windowManager?.updateViewLayout(view, params)
+        } catch (_: Exception) {}
+    }
+
     private fun clampBubbleY(y: Int): Int {
-        val screenHeight = resources.displayMetrics.heightPixels
+        val (top, bottom) = bubbleYBounds()
+        return y.coerceIn(top, bottom)
+    }
+
+    private fun bubbleYBounds(): Pair<Int, Int> {
         val top = dp(TOP_AVOID_DP)
-        val bottom = screenHeight - dp(BOTTOM_AVOID_DP) - touchTargetPx()
-        val maxY = bottom.coerceAtLeast(top)
-        return y.coerceIn(top, maxY)
+        val bottom = overlayHeightPx() - bottomNavigationInsetPx() - dp(BOTTOM_MARGIN_DP) - touchTargetPx()
+        return top to bottom.coerceAtLeast(top)
+    }
+
+    private fun verticalFraction(y: Int, top: Int, bottom: Int): Float {
+        if (bottom <= top) return 0f
+        return ((y - top).toFloat() / (bottom - top)).coerceIn(0f, 1f)
+    }
+
+    private fun yForFraction(fraction: Float): Int {
+        val (top, bottom) = bubbleYBounds()
+        return top + ((bottom - top) * fraction.coerceIn(0f, 1f)).roundToInt()
+    }
+
+    private fun rememberBubbleBounds() {
+        val (top, bottom) = bubbleYBounds()
+        lastBubbleTop = top
+        lastBubbleBottom = bottom
+    }
+
+    private fun edgeX(edge: Edge, bubbleWidth: Int): Int {
+        return if (edge == Edge.LEFT) 0 else (overlayWidthPx() - bubbleWidth).coerceAtLeast(0)
+    }
+
+    private fun repositionBubble(verticalFraction: Float) {
+        val view = bubbleView ?: return
+        val params = layoutParams ?: return
+
+        params.x = edgeX(currentEdge, params.width)
+        params.y = yForFraction(verticalFraction)
+        (view as? WhisperTabView)?.edge = currentEdge
+
+        try {
+            windowManager?.updateViewLayout(view, params)
+        } catch (_: Exception) {}
+
+        rememberBubbleBounds()
+        savePosition()
+    }
+
+    private fun overlayWidthPx(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return resources.displayMetrics.widthPixels
+        }
+
+        return try {
+            val wm = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+            wm.currentWindowMetrics.bounds.width()
+        } catch (_: Exception) {
+            resources.displayMetrics.widthPixels
+        }
+    }
+
+    private fun overlayHeightPx(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return resources.displayMetrics.heightPixels
+        }
+
+        return try {
+            val wm = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+            wm.currentWindowMetrics.bounds.height()
+        } catch (_: Exception) {
+            resources.displayMetrics.heightPixels
+        }
+    }
+
+    private fun bottomNavigationInsetPx(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return 0
+        }
+
+        return try {
+            val wm = windowManager ?: getSystemService(WINDOW_SERVICE) as WindowManager
+            wm.currentWindowMetrics.windowInsets
+                .getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars())
+                .bottom
+        } catch (_: Exception) {
+            0
+        }
     }
 
     private fun edgeForX(x: Int): Edge {
-        val screenWidth = resources.displayMetrics.widthPixels
+        val screenWidth = overlayWidthPx()
         return if (x + touchTargetPx() / 2 < screenWidth / 2) Edge.LEFT else Edge.RIGHT
     }
 
@@ -319,12 +442,21 @@ class TranscriptionOverlayService : AccessibilityService() {
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val touchTarget = touchTargetPx()
+        val initialWidth = if (state == State.IDLE) collapsedTouchTargetPx() else touchTarget
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val defaultX = resources.displayMetrics.widthPixels - touchTarget
+        val defaultX = overlayWidthPx() - touchTarget
         val savedX = if (prefs.contains(KEY_BUBBLE_X)) prefs.getInt(KEY_BUBBLE_X, defaultX) else defaultX
-        val savedY = prefs.getInt(KEY_BUBBLE_Y, resources.displayMetrics.heightPixels / 2 - touchTarget / 2)
-        currentEdge = edgeForX(savedX)
+        currentEdge = if (prefs.contains(KEY_BUBBLE_EDGE_LEFT)) {
+            if (prefs.getBoolean(KEY_BUBBLE_EDGE_LEFT, false)) Edge.LEFT else Edge.RIGHT
+        } else {
+            edgeForX(savedX)
+        }
+        val savedY = if (prefs.contains(KEY_BUBBLE_Y_FRACTION)) {
+            yForFraction(prefs.getFloat(KEY_BUBBLE_Y_FRACTION, 0.5f))
+        } else {
+            prefs.getInt(KEY_BUBBLE_Y, overlayHeightPx() / 2 - touchTarget / 2)
+        }
 
         // MIUI/Xiaomi doesn't deliver touch events for TYPE_ACCESSIBILITY_OVERLAY.
         // Use TYPE_APPLICATION_OVERLAY when overlay permission is granted, fall back otherwise.
@@ -335,13 +467,13 @@ class TranscriptionOverlayService : AccessibilityService() {
         }
 
         layoutParams = WindowManager.LayoutParams(
-            touchTarget, touchTarget,
+            initialWidth, touchTarget,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = if (currentEdge == Edge.LEFT) 0 else resources.displayMetrics.widthPixels - touchTarget
+            x = edgeX(currentEdge, initialWidth)
             y = clampBubbleY(savedY)
         }
 
@@ -352,7 +484,7 @@ class TranscriptionOverlayService : AccessibilityService() {
             alpha = if (state == State.IDLE) IDLE_ALPHA else 1.0f
             elevation = 0f
             isClickable = true
-            contentDescription = "Whisper tab"
+            contentDescription = "Swipe inward to start voice input"
         }
 
         setupTouchListener()
@@ -360,6 +492,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         try {
             windowManager?.addView(bubbleView, layoutParams)
             bubbleVisible = true
+            rememberBubbleBounds()
             // Start as foreground service to prevent Android from killing us
             val notification = buildNotification(bubbleHidden = false)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -413,8 +546,10 @@ class TranscriptionOverlayService : AccessibilityService() {
         var moved = false
         var moveEnabled = false
         var longPressTriggered = false
-        var hideBySwipe = false
+        var parkBySwipe = false
         var revealBySwipe = false
+        var collapsedOnDown = false
+        var recordingStartedBySwipe = false
 
         view.setOnTouchListener { v, event ->
             when (event.actionMasked) {
@@ -426,16 +561,23 @@ class TranscriptionOverlayService : AccessibilityService() {
                     moved = false
                     moveEnabled = false
                     longPressTriggered = false
-                    hideBySwipe = false
+                    parkBySwipe = false
                     revealBySwipe = false
+                    recordingStartedBySwipe = false
+                    collapsedOnDown = state == State.IDLE && (v as? WhisperTabView)?.expanded == false
                     idleHandler.removeCallbacks(idleCollapseRunnable)
-                    expandTab()
+                    if (!collapsedOnDown) {
+                        expandTab()
+                    }
 
                     // Long press turns the tab into a draggable handle.
                     if (state == State.IDLE) {
                         longPressRunnable = Runnable {
                             longPressTriggered = true
                             moveEnabled = true
+                            expandTab()
+                            initialX = params.x
+                            initialY = params.y
                             vibrate(30)
                         }
                         longPressHandler.postDelayed(longPressRunnable!!, LONG_PRESS_TO_MOVE_MS)
@@ -458,9 +600,16 @@ class TranscriptionOverlayService : AccessibilityService() {
                             (currentEdge == Edge.RIGHT && deltaX < 0)
                         val outward = (currentEdge == Edge.LEFT && deltaX < 0) ||
                             (currentEdge == Edge.RIGHT && deltaX > 0)
-                        revealBySwipe = inward
-                        hideBySwipe = outward
+                        parkBySwipe = outward
                         longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
+
+                        if (collapsedOnDown && inward && !recordingStartedBySwipe) {
+                            recordingStartedBySwipe = true
+                            revealBySwipe = false
+                            startRecording()
+                        } else {
+                            revealBySwipe = inward
+                        }
                     }
 
                     if (moveEnabled) {
@@ -475,8 +624,14 @@ class TranscriptionOverlayService : AccessibilityService() {
                 MotionEvent.ACTION_UP -> {
                     longPressRunnable?.let { longPressHandler.removeCallbacks(it) }
 
-                    if (hideBySwipe) {
-                        hideBubble()
+                    if (parkBySwipe) {
+                        // An outward swipe means "park at the edge", not "turn off".
+                        // This keeps rotation or a slightly diagonal gesture from making
+                        // the microphone disappear until Settings is opened again.
+                        collapseTab()
+                        savePosition()
+                    } else if (recordingStartedBySwipe) {
+                        // The inward swipe already started dictation; releasing should not stop it.
                     } else if (moveEnabled && moved) {
                         snapToEdge()
                         savePosition()
@@ -486,7 +641,11 @@ class TranscriptionOverlayService : AccessibilityService() {
                         savePosition()
                         scheduleIdleCollapse()
                     } else if (!moved) {
-                        onBubbleTapped()
+                        if (collapsedOnDown && state == State.IDLE) {
+                            collapseTab()
+                        } else {
+                            onBubbleTapped()
+                        }
                     } else {
                         scheduleIdleCollapse()
                     }
@@ -507,16 +666,17 @@ class TranscriptionOverlayService : AccessibilityService() {
         tab.animate().cancel()
         tab.expanded = true
         tab.alpha = 1.0f
+        resizeBubbleWidth(touchTargetPx())
     }
 
     private fun snapToEdge() {
         val params = layoutParams ?: return
-        val screenWidth = resources.displayMetrics.widthPixels
-        val touchTarget = touchTargetPx()
-        val centerX = params.x + touchTarget / 2
+        val screenWidth = overlayWidthPx()
+        val currentWidth = params.width.takeIf { it > 0 } ?: touchTargetPx()
+        val centerX = params.x + currentWidth / 2
 
         currentEdge = if (centerX < screenWidth / 2) Edge.LEFT else Edge.RIGHT
-        params.x = if (currentEdge == Edge.LEFT) 0 else screenWidth - touchTarget
+        params.x = edgeX(currentEdge, currentWidth)
         params.y = clampBubbleY(params.y)
         (bubbleView as? WhisperTabView)?.edge = currentEdge
 
@@ -530,6 +690,7 @@ class TranscriptionOverlayService : AccessibilityService() {
         val tab = bubbleView as? WhisperTabView ?: return
         snapToEdge()
         tab.expanded = false
+        resizeBubbleWidth(collapsedTouchTargetPx())
         tab.animate().alpha(IDLE_ALPHA).setDuration(180).start()
     }
 
@@ -542,10 +703,13 @@ class TranscriptionOverlayService : AccessibilityService() {
 
     private fun savePosition() {
         val params = layoutParams ?: return
+        val (top, bottom) = bubbleYBounds()
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_BUBBLE_X, params.x)
             .putInt(KEY_BUBBLE_Y, params.y)
+            .putBoolean(KEY_BUBBLE_EDGE_LEFT, currentEdge == Edge.LEFT)
+            .putFloat(KEY_BUBBLE_Y_FRACTION, verticalFraction(params.y, top, bottom))
             .apply()
     }
 
